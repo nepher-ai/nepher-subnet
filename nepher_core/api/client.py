@@ -110,18 +110,44 @@ class TournamentAPI:
     def _handle_error_response(self, response: httpx.Response) -> None:
         """Handle error responses and raise appropriate exceptions."""
         status = response.status_code
+        raw_body = response.text
+        
+        # Always log the raw response for debugging
+        logger.error(f"API error {status}, raw response: {raw_body}")
+        
         try:
             body = response.json()
-            message = body.get("detail", body.get("message", str(body)))
-        except Exception:
-            message = response.text or f"HTTP {status}"
+            # Handle FastAPI validation errors which have 'detail' as a list
+            # Also handle API format with 'details' (plural)
+            detail = body.get("detail") or body.get("details")
+            if isinstance(detail, list):
+                # Format validation errors nicely
+                errors = []
+                for err in detail:
+                    if isinstance(err, dict):
+                        loc = err.get("loc", [])
+                        msg = err.get("msg", "")
+                        loc_str = " -> ".join(str(x) for x in loc)
+                        errors.append(f"  {loc_str}: {msg}")
+                    else:
+                        errors.append(f"  {err}")
+                message = "Validation errors:\n" + "\n".join(errors)
+            elif isinstance(detail, str):
+                message = detail
+            elif detail is not None:
+                message = str(detail)
+            else:
+                message = body.get("message", str(body))
+        except Exception as e:
+            logger.debug(f"Failed to parse error response: {e}")
+            message = raw_body or f"HTTP {status}"
 
         if status == 401 or status == 403:
-            raise AuthenticationError(message, status_code=status)
+            raise AuthenticationError(message, status_code=status, response_body=raw_body)
         elif status == 404:
-            raise NotFoundError(message, status_code=status)
+            raise NotFoundError(message, status_code=status, response_body=raw_body)
         elif status == 400 or status == 422:
-            raise ValidationError(message, status_code=status)
+            raise ValidationError(message, status_code=status, response_body=raw_body)
         elif status == 429:
             retry_after = response.headers.get("Retry-After")
             raise RateLimitError(
@@ -130,7 +156,7 @@ class TournamentAPI:
                 retry_after=int(retry_after) if retry_after else None,
             )
         else:
-            raise APIError(message, status_code=status)
+            raise APIError(message, status_code=status, response_body=raw_body)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -250,26 +276,24 @@ class TournamentAPI:
 
     async def request_upload_token(
         self,
-        tournament_id: str,
         miner_hotkey: str,
+        public_key: str,
+        file_info: str,
         signature: str,
-        file_checksum: str,
         file_size: int,
-        agent_name: Optional[str] = None,
     ) -> UploadToken:
         """
         Request an upload token for agent submission.
         
         Args:
-            tournament_id: Tournament ID
-            miner_hotkey: Miner's hotkey
-            signature: Signature proving hotkey ownership
-            file_checksum: SHA256 checksum of the file
+            miner_hotkey: Miner's SS58 hotkey address
+            public_key: Hex-encoded public key of the hotkey
+            file_info: Signed message in format "hotkey:content_hash:timestamp"
+            signature: Hex-encoded signature of file_info
             file_size: Size of the file in bytes
-            agent_name: Optional agent name
             
         Returns:
-            Upload token with URL
+            Upload token with tournament_id
             
         Endpoint: POST /api/v1/agents/upload/verify
         """
@@ -277,43 +301,61 @@ class TournamentAPI:
             "POST",
             "/api/v1/agents/upload/verify",
             json={
-                "tournament_id": tournament_id,
                 "miner_hotkey": miner_hotkey,
+                "public_key": public_key,
+                "file_info": file_info,
                 "signature": signature,
-                "file_checksum": file_checksum,
                 "file_size": file_size,
-                "agent_name": agent_name,
             },
         )
         return UploadToken(**response.json())
 
     async def upload_agent(
         self,
-        agent_id: str,
+        tournament_id: str,
+        upload_token: str,
+        miner_hotkey: str,
+        content_hash: str,
         file_path: Path,
     ) -> Agent:
         """
-        Upload agent file.
+        Upload agent file using upload token.
         
         Args:
-            agent_id: Agent ID from upload token
+            tournament_id: Tournament ID from verify response
+            upload_token: Upload token from verify response
+            miner_hotkey: Miner's SS58 hotkey address
+            content_hash: SHA256 checksum of the file
             file_path: Path to the ZIP file
             
         Returns:
             Created agent
             
-        Endpoint: POST /api/v1/agents/upload/{id}
+        Endpoint: POST /api/v1/agents/upload/{tournament_id}
         """
-        client = await self._get_client()
-        url = self._build_url(f"/api/v1/agents/upload/{agent_id}")
+        url = self._build_url(f"/api/v1/agents/upload/{tournament_id}")
         
-        with open(file_path, "rb") as f:
-            files = {"file": (file_path.name, f, "application/zip")}
-            response = await client.post(
-                url,
-                files=files,
-                timeout=httpx.Timeout(self.UPLOAD_TIMEOUT),
-            )
+        # Use a separate client for file uploads to avoid Content-Type conflicts
+        # The default client has Content-Type: application/json which breaks multipart uploads
+        upload_headers = {
+            "X-API-Key": self.api_key,
+            "Accept": "application/json",
+            "X-Upload-Token": upload_token,
+        }
+        
+        async with httpx.AsyncClient(timeout=httpx.Timeout(self.UPLOAD_TIMEOUT)) as upload_client:
+            with open(file_path, "rb") as f:
+                files = {"file": (file_path.name, f, "application/zip")}
+                data = {
+                    "miner_hotkey": miner_hotkey,
+                    "content_hash": content_hash,
+                }
+                response = await upload_client.post(
+                    url,
+                    files=files,
+                    data=data,
+                    headers=upload_headers,
+                )
         
         if response.status_code >= 400:
             self._handle_error_response(response)
@@ -485,17 +527,23 @@ class TournamentAPI:
         }
 
         if log_file and log_file.exists():
-            client = await self._get_client()
             url = self._build_url("/api/v1/evaluations/submit")
             
-            with open(log_file, "rb") as f:
-                files = {"log_file": (log_file.name, f, "application/zip")}
-                response = await client.post(
-                    url,
-                    data={"data": str(data)},
-                    files=files,
-                    timeout=httpx.Timeout(self.UPLOAD_TIMEOUT),
-                )
+            # Use a separate client for file uploads to avoid Content-Type conflicts
+            upload_headers = {
+                "X-API-Key": self.api_key,
+                "Accept": "application/json",
+            }
+            
+            async with httpx.AsyncClient(timeout=httpx.Timeout(self.UPLOAD_TIMEOUT)) as upload_client:
+                with open(log_file, "rb") as f:
+                    files = {"log_file": (log_file.name, f, "application/zip")}
+                    response = await upload_client.post(
+                        url,
+                        data={"data": str(data)},
+                        files=files,
+                        headers=upload_headers,
+                    )
             
             if response.status_code >= 400:
                 self._handle_error_response(response)

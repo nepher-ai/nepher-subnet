@@ -4,7 +4,7 @@
 # Tournament API configuration
 tournament:
   api_url: "https://tournament.nepher.ai"
-  api_key: "${NEPHER_API_KEY}"  # Set via environment variable
+  api_key: "${NEPHER_API_KEY:-}"  # Set via env var or --api-key CLI arg
 
 # Wallet configuration
 wallet:

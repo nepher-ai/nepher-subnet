@@ -9,13 +9,12 @@ Handles:
 """
 
 import time
-from pathlib import Path
-from typing import Optional, Tuple, List
 import tempfile
+from pathlib import Path
+from typing import Tuple, List
 
-from nepher_core.api import TournamentAPI, APIError
-from nepher_core.wallet import load_wallet, get_hotkey, sign_message
-from nepher_core.wallet.utils import create_signing_message
+from nepher_core.api import TournamentAPI
+from nepher_core.wallet import load_wallet, get_hotkey, get_public_key, sign_message, create_file_info
 from nepher_core.utils.helpers import (
     compute_checksum,
     zip_directory,
@@ -96,11 +95,11 @@ async def submit_agent(
     wallet_hotkey: str,
     api_key: str,
     api_url: str,
-    tournament_id: Optional[str] = None,
-    agent_name: Optional[str] = None,
 ) -> str:
     """
     Submit an agent to the tournament.
+    
+    The active tournament is automatically selected by the backend.
     
     Args:
         agent_path: Path to agent directory
@@ -108,8 +107,6 @@ async def submit_agent(
         wallet_hotkey: Hotkey name
         api_key: Tournament API key
         api_url: Tournament API URL
-        tournament_id: Tournament ID (uses active if not specified)
-        agent_name: Optional agent name
         
     Returns:
         Agent ID of the submitted agent
@@ -119,53 +116,49 @@ async def submit_agent(
         APIError: If API request fails
     """
     # Load wallet
-    logger.info(f"Loading wallet: {wallet_name}/{wallet_hotkey}")
     wallet = load_wallet(name=wallet_name, hotkey=wallet_hotkey)
     miner_hotkey = get_hotkey(wallet)
+    public_key = get_public_key(wallet)
     
-    # Create API client
-    async with TournamentAPI(api_key=api_key, base_url=api_url) as api:
-        # Get tournament ID if not specified
-        if not tournament_id:
-            logger.info("Getting active tournament...")
-            tournament = await api.get_active_tournament()
-            if not tournament:
-                raise ValueError("No active tournament found")
-            tournament_id = tournament.id
-            logger.info(f"Using tournament: {tournament.name} ({tournament_id})")
+    # Create ZIP archive first (need checksum for signing)
+    logger.info("Creating submission archive...")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        archive_path = Path(temp_dir) / "agent.zip"
+        zip_directory(agent_path, archive_path)
         
-        # Create ZIP archive
-        logger.info("Creating submission archive...")
-        with tempfile.TemporaryDirectory() as temp_dir:
-            archive_path = Path(temp_dir) / "agent.zip"
-            zip_directory(agent_path, archive_path)
-            
-            # Compute checksum and size
-            file_checksum = compute_checksum(archive_path)
-            file_size = get_file_size(archive_path)
-            logger.info(f"Archive: {file_size} bytes, checksum: {file_checksum[:16]}...")
-            
-            # Create and sign message
-            timestamp = int(time.time())
-            message = create_signing_message(miner_hotkey, file_checksum, timestamp)
-            signature = sign_message(wallet, message)
-            logger.debug(f"Signed message with hotkey: {miner_hotkey}")
-            
-            # Request upload token
+        # Compute checksum and size
+        content_hash = compute_checksum(archive_path)
+        file_size = get_file_size(archive_path)
+        logger.info(f"Archive: {file_size} bytes, checksum: {content_hash[:16]}...")
+        
+        # Create file_info and sign it
+        timestamp = int(time.time())
+        file_info = create_file_info(miner_hotkey, content_hash, timestamp)
+        signature = sign_message(wallet, file_info)
+        logger.debug(f"Signed file_info with hotkey: {miner_hotkey}")
+        
+        # Create API client
+        async with TournamentAPI(api_key=api_key, base_url=api_url) as api:
+            # Request upload token (this also validates and gets tournament)
             logger.info("Requesting upload token...")
             token = await api.request_upload_token(
-                tournament_id=tournament_id,
                 miner_hotkey=miner_hotkey,
+                public_key=public_key,
+                file_info=file_info,
                 signature=signature,
-                file_checksum=file_checksum,
                 file_size=file_size,
-                agent_name=agent_name,
             )
             
+            tournament_id = token.tournament_id
+            logger.info(f"Using tournament: {tournament_id}")
+            
             # Upload agent
-            logger.info(f"Uploading agent (ID: {token.agent_id})...")
+            logger.info("Uploading agent...")
             agent = await api.upload_agent(
-                agent_id=token.agent_id,
+                tournament_id=tournament_id,
+                upload_token=token.upload_token,
+                miner_hotkey=miner_hotkey,
+                content_hash=content_hash,
                 file_path=archive_path,
             )
             

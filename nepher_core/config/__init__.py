@@ -1,6 +1,6 @@
 """Configuration management module."""
 
-from nepher_core.config.loader import Config, ConfigManager
+from nepher_core.config.loader import ConfigManager
 from nepher_core.config.models import (
     SubnetConfig,
     TournamentConfig,
@@ -14,7 +14,6 @@ from nepher_core.config.models import (
 )
 
 __all__ = [
-    "Config",
     "ConfigManager",
     "SubnetConfig",
     "TournamentConfig",

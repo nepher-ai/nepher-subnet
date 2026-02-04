@@ -67,6 +67,19 @@ def get_hotkey(wallet: Wallet) -> str:
     return wallet.hotkey.ss58_address
 
 
+def get_public_key(wallet: Wallet) -> str:
+    """
+    Get the hex-encoded public key of the wallet's hotkey.
+    
+    Args:
+        wallet: Loaded wallet
+        
+    Returns:
+        Hex-encoded public key
+    """
+    return wallet.hotkey.public_key.hex()
+
+
 def sign_message(wallet: Wallet, message: str) -> str:
     """
     Sign a message using the wallet's hotkey.
@@ -110,26 +123,28 @@ def verify_signature(
         return False
 
 
-def create_signing_message(
+def create_file_info(
     miner_hotkey: str,
-    file_checksum: str,
+    content_hash: str,
     timestamp: int,
 ) -> str:
     """
-    Create a standardized message for signing agent submissions.
+    Create file_info string for signing agent submissions.
+    
+    Format: "hotkey:content_hash:timestamp"
     
     Args:
         miner_hotkey: Miner's SS58 hotkey address
-        file_checksum: SHA256 checksum of the file
+        content_hash: SHA256 checksum of the file
         timestamp: Unix timestamp
         
     Returns:
-        Formatted message for signing
+        Formatted file_info for signing
     """
-    return f"nepher-submit:{miner_hotkey}:{file_checksum}:{timestamp}"
+    return f"{miner_hotkey}:{content_hash}:{timestamp}"
 
 
-def get_subtensor(network: str = "finney") -> bt.subtensor:
+def get_subtensor(network: str = "finney") -> bt.Subtensor:
     """
     Get a Bittensor subtensor connection.
     
@@ -140,13 +155,13 @@ def get_subtensor(network: str = "finney") -> bt.subtensor:
         Connected subtensor instance
     """
     logger.info(f"Connecting to Bittensor network: {network}")
-    return bt.subtensor(network=network)
+    return bt.Subtensor(network=network)
 
 
 def get_metagraph(
-    subtensor: bt.subtensor,
+    subtensor: bt.Subtensor,
     netuid: int,
-) -> bt.metagraph:
+) -> bt.Metagraph:
     """
     Get the metagraph for a subnet.
     
@@ -162,7 +177,7 @@ def get_metagraph(
 
 
 def find_uid_for_hotkey(
-    metagraph: bt.metagraph,
+    metagraph: bt.Metagraph,
     hotkey: str,
 ) -> Optional[int]:
     """

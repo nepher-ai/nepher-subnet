@@ -55,8 +55,8 @@ class WeightSetter:
         self.config = config
         self.api = api
         self._wallet: Optional[Wallet] = None
-        self._subtensor: Optional[bt.subtensor] = None
-        self._metagraph: Optional[bt.metagraph] = None
+        self._subtensor: Optional[bt.Subtensor] = None
+        self._metagraph: Optional[bt.Metagraph] = None
 
     def _load_wallet(self) -> Wallet:
         """Load wallet for signing transactions."""
@@ -68,13 +68,13 @@ class WeightSetter:
             )
         return self._wallet
 
-    def _get_subtensor(self) -> bt.subtensor:
+    def _get_subtensor(self) -> bt.Subtensor:
         """Get subtensor connection."""
         if self._subtensor is None:
             self._subtensor = get_subtensor(self.config.subnet.network)
         return self._subtensor
 
-    def _get_metagraph(self) -> bt.metagraph:
+    def _get_metagraph(self) -> bt.Metagraph:
         """Get and cache metagraph."""
         subtensor = self._get_subtensor()
         # Always refresh metagraph for settlement
@@ -123,7 +123,7 @@ class WeightSetter:
     async def _get_winner_uid(
         self,
         tournament_id: str,
-        metagraph: bt.metagraph,
+        metagraph: bt.Metagraph,
     ) -> int:
         """
         Get winner UID from tournament API.
@@ -171,7 +171,7 @@ class WeightSetter:
     async def _set_weights(
         self,
         target_uid: int,
-        metagraph: bt.metagraph,
+        metagraph: bt.Metagraph,
     ) -> None:
         """
         Set all weight to a single UID.

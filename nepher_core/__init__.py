@@ -9,7 +9,7 @@ This module provides common functionality for both miners and validators:
 """
 
 from nepher_core.api.client import TournamentAPI
-from nepher_core.config.loader import Config, ConfigManager
+from nepher_core.config.loader import ConfigManager
 from nepher_core.config.models import (
     SubnetConfig,
     TournamentConfig,
@@ -23,7 +23,6 @@ from nepher_core.utils.logging import setup_logging, get_logger
 __version__ = "1.0.0"
 __all__ = [
     "TournamentAPI",
-    "Config",
     "ConfigManager",
     "SubnetConfig",
     "TournamentConfig", 

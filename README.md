@@ -44,26 +44,27 @@ Nepher is a decentralized robotics tournament platform on Bittensor that enables
 
 ### For Miners
 
-1. **Install the package:**
+1. **Clone and install:**
    ```bash
-   pip install nepher-subnet
+   git clone https://github.com/nepher-ai/nepher-subnet.git
+   cd nepher-subnet
+   pip install -e .
    ```
 
 2. **Train your agent** locally using the evaluation environments
 
-3. **Submit your agent:**
+3. **Configure and submit:**
    ```bash
-   nepher-miner submit \
-       --path ./my-agent \
-       --wallet-name miner \
-       --wallet-hotkey default \
-       --api-key your_api_key
+   cp config/miner_config.example.yaml config/miner_config.yaml
+   # Edit with your wallet and API key settings
+   
+   nepher-miner submit --path ./my-agent --config config/miner_config.yaml
    ```
 
 ### For Validators
 
 1. **Prerequisites:**
-   - NVIDIA GPU (RTX 4090+ recommended)
+   - NVIDIA GPU (RTX A100+ recommended)
    - Isaac Lab 2.3.0 + Isaac Sim 5.1
    - Docker with NVIDIA Container Toolkit
 
@@ -86,8 +87,6 @@ Nepher is a decentralized robotics tournament platform on Bittensor that enables
 
 ## Installation
 
-### From Source
-
 ```bash
 git clone https://github.com/nepher-ai/nepher-subnet.git
 cd nepher-subnet
@@ -102,19 +101,23 @@ pip install -e ".[dev]"
 
 ## Configuration
 
-### Environment Variables
+Copy the example config and customize:
 
-| Variable | Description | Default |
-|----------|-------------|---------|
+```bash
+# For miners
+cp config/miner_config.example.yaml config/miner_config.yaml
+
+# For validators  
+cp config/validator_config.example.yaml config/validator_config.yaml
+```
+
+Config values can be set via: **CLI args > config file > environment variables > defaults**
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
 | `NEPHER_API_KEY` | Tournament API key | Required |
-| `NEPHER_API_URL` | Tournament API URL | https://tournament.nepher.ai |
-| `WALLET_NAME` | Bittensor wallet name | validator/miner |
+| `WALLET_NAME` | Bittensor wallet name | miner/validator |
 | `WALLET_HOTKEY` | Bittensor hotkey name | default |
-| `NEPHER_WORKSPACE` | Workspace directory | ./workspace |
-
-### Validator Configuration
-
-See `config/validator_config.example.yaml` for full configuration options.
 
 ## Agent Structure
 
@@ -182,8 +185,11 @@ mypy nepher_core miner validator
 ### Miner CLI
 
 ```bash
-# Submit agent
-nepher-miner submit --path ./agent --wallet-name miner --api-key KEY
+# Submit with config file (recommended)
+nepher-miner submit --path ./agent --config config/miner_config.yaml
+
+# Or with CLI args
+nepher-miner submit --path ./agent --wallet-name miner --wallet-hotkey default --api-key KEY
 
 # Validate agent structure
 nepher-miner validate --path ./agent
