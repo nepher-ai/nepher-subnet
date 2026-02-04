@@ -1,0 +1,16 @@
+# Nepher Subnet Dependencies
+# Core dependencies
+bittensor>=7.0.0
+bittensor-wallet>=2.0.0
+httpx>=0.25.0
+pyyaml>=6.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+tenacity>=8.2.0
+structlog>=23.0.0
+aiofiles>=23.0.0
+python-dotenv>=1.0.0
+
+# Validator-specific (uncomment for validator)
+# nepher>=0.1.0
+

@@ -1,0 +1,61 @@
+# Nepher Validator Dockerfile
+# Based on NVIDIA Isaac Sim for evaluation capability
+
+FROM nvcr.io/nvidia/isaac-sim:4.2.0
+
+# Set environment
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV ACCEPT_EULA=Y
+ENV ISAACSIM_PATH=/isaac-sim
+ENV ISAACLAB_PATH=/isaac-lab
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone and install Isaac Lab
+RUN git clone --depth 1 https://github.com/isaac-sim/IsaacLab.git ${ISAACLAB_PATH} \
+    && cd ${ISAACLAB_PATH} \
+    && ./isaaclab.sh --install
+
+# Use Isaac Lab's Python environment
+ENV PYTHON_CMD="${ISAACLAB_PATH}/isaaclab.sh -p"
+
+# Copy requirements and install
+COPY requirements.txt .
+RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir -r requirements.txt
+
+# Install nepher (envhub)
+RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install nepher
+
+# Copy source code
+COPY nepher_core/ ./nepher_core/
+COPY validator/ ./validator/
+COPY pyproject.toml .
+
+# Install packages
+RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e .
+
+# Clone eval-nav repository
+RUN git clone https://github.com/nepher-ai/eval-nav.git ./eval-nav \
+    && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e ./eval-nav
+
+# Create directories for volumes
+RUN mkdir -p /app/config /app/workspace /root/.cache/nepher
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD ${ISAACLAB_PATH}/isaaclab.sh -p -c "import nepher_core; print('OK')" || exit 1
+
+# Entry point script
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["run", "--config", "/app/config/validator_config.yaml"]
+

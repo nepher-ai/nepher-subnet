@@ -1,0 +1,46 @@
+# Nepher Validator Configuration
+# Copy to validator_config.yaml and customize
+
+# Subnet configuration
+subnet:
+  network: "finney"          # Network: finney, test, local
+  subnet_uid: 49             # Nepher subnet UID
+
+# Tournament API configuration
+tournament:
+  api_url: "https://tournament.nepher.ai"
+  api_key: "${NEPHER_API_KEY}"  # Set via environment variable
+
+# Wallet configuration
+wallet:
+  name: "${WALLET_NAME:-validator}"      # Wallet name (default: validator)
+  hotkey: "${WALLET_HOTKEY:-default}"    # Hotkey name (default: default)
+  # path: "/custom/wallet/path"          # Optional custom path
+
+# Isaac Lab/Sim version requirements
+isaac:
+  lab_version: "2.3.0"       # Expected Isaac Lab version
+  sim_version: "5.1"         # Expected Isaac Sim version
+
+# Paths configuration
+paths:
+  workspace: "${NEPHER_WORKSPACE:-./workspace}"
+  eval_repo: "${NEPHER_EVAL_REPO:-./eval-nav}"
+  env_cache: "${NEPHER_ENV_CACHE:-~/.cache/nepher}"
+
+# Retry configuration
+retry:
+  # Network request retries
+  network_max_attempts: 3
+  network_initial_delay: 1.0
+  network_max_delay: 30.0
+  network_backoff_factor: 2.0
+  
+  # Evaluation retries
+  evaluation_max_attempts: 2
+  evaluation_timeout_seconds: 3600   # 1 hour per agent
+  
+  # Weight setting retries
+  weight_setting_max_attempts: 5
+  weight_setting_initial_delay: 5.0
+

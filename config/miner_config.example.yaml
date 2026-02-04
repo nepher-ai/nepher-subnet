@@ -1,0 +1,14 @@
+# Nepher Miner Configuration
+# Copy to miner_config.yaml and customize
+
+# Tournament API configuration
+tournament:
+  api_url: "https://tournament.nepher.ai"
+  api_key: "${NEPHER_API_KEY}"  # Set via environment variable
+
+# Wallet configuration
+wallet:
+  name: "${WALLET_NAME:-miner}"          # Wallet name (default: miner)
+  hotkey: "${WALLET_HOTKEY:-default}"    # Hotkey name (default: default)
+  # path: "/custom/wallet/path"          # Optional custom path
+

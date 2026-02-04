@@ -1,0 +1,248 @@
+"""
+Validator main orchestrator.
+
+The central coordinator that manages the validator lifecycle:
+- Tournament monitoring
+- State machine transitions
+- Phase handlers (setup, evaluation, settlement)
+"""
+
+import asyncio
+import time
+from pathlib import Path
+from typing import Optional
+
+from nepher_core.api import TournamentAPI, Tournament
+from nepher_core.config import ValidatorConfig, ConfigManager
+from nepher_core.config.loader import load_config
+from nepher_core.wallet import load_wallet, get_hotkey
+from nepher_core.utils.logging import get_logger, setup_logging
+
+from validator.state import (
+    TournamentPeriod,
+    ValidatorStateManager,
+    get_current_period,
+)
+from validator.setup import SetupManager
+from validator.evaluation import EvaluationOrchestrator
+from validator.settlement import WeightSetter
+
+logger = get_logger(__name__)
+
+
+class ValidatorOrchestrator:
+    """
+    Main validator orchestrator.
+    
+    Manages the complete validator lifecycle:
+    1. Monitor for active tournaments
+    2. Run setup during grace window
+    3. Evaluate agents during evaluation period
+    4. Set weights during settlement period
+    5. Reset and wait for next tournament
+    """
+
+    # Polling intervals (seconds)
+    NO_TOURNAMENT_INTERVAL = 300  # 5 minutes
+    CONTEST_INTERVAL = 60  # 1 minute
+    REVIEW_INTERVAL = 60  # 1 minute
+    COMPLETED_INTERVAL = 300  # 5 minutes
+    ERROR_INTERVAL = 60  # 1 minute
+
+    def __init__(self, config: ValidatorConfig):
+        """
+        Initialize validator orchestrator.
+        
+        Args:
+            config: Validator configuration
+        """
+        self.config = config
+        self.api = TournamentAPI(
+            api_key=config.api_key,
+            base_url=config.api_url,
+        )
+        
+        # Load wallet and get hotkey
+        wallet = load_wallet(
+            name=config.wallet.name,
+            hotkey=config.wallet.hotkey,
+            path=config.wallet.path,
+        )
+        self.validator_hotkey = get_hotkey(wallet)
+        
+        # State manager
+        self.state = ValidatorStateManager()
+        
+        # Phase handlers (initialized lazily)
+        self._setup_manager: Optional[SetupManager] = None
+        self._evaluation_orchestrator: Optional[EvaluationOrchestrator] = None
+        self._weight_setter: Optional[WeightSetter] = None
+        
+        # Current tournament
+        self._current_tournament: Optional[Tournament] = None
+
+    async def run(self) -> None:
+        """
+        Run the main validator loop.
+        
+        This is the primary entry point that handles all tournament phases.
+        """
+        logger.info("=" * 60)
+        logger.info("Nepher Validator Starting")
+        logger.info(f"Validator Hotkey: {self.validator_hotkey}")
+        logger.info(f"Network: {self.config.subnet.network}")
+        logger.info(f"Subnet UID: {self.config.subnet.subnet_uid}")
+        logger.info("=" * 60)
+        
+        try:
+            await self._main_loop()
+        finally:
+            await self.api.close()
+
+    async def _main_loop(self) -> None:
+        """Main validator loop."""
+        while True:
+            try:
+                # 1. Check for active tournament
+                tournament = await self.api.get_active_tournament()
+                self._current_tournament = tournament
+                
+                if tournament is None:
+                    logger.info("No active tournament. Waiting...")
+                    await asyncio.sleep(self.NO_TOURNAMENT_INTERVAL)
+                    continue
+                
+                # Check for tournament change
+                if self.state.check_tournament_change(tournament.id):
+                    logger.info(f"Tournament changed to: {tournament.id}")
+                    self.state.reset()
+                
+                # 2. Determine current period
+                current_time = int(time.time())
+                period = get_current_period(tournament, current_time)
+                
+                # 3. Handle state transitions
+                await self._handle_period(tournament, period)
+                
+            except Exception as e:
+                logger.error(f"Main loop error: {e}", exc_info=True)
+                await asyncio.sleep(self.ERROR_INTERVAL)
+
+    async def _handle_period(
+        self,
+        tournament: Tournament,
+        period: TournamentPeriod,
+    ) -> None:
+        """
+        Handle current tournament period.
+        
+        Args:
+            tournament: Current tournament
+            period: Current period
+        """
+        match period:
+            case TournamentPeriod.NO_TOURNAMENT:
+                self.state.reset()
+                await asyncio.sleep(self.NO_TOURNAMENT_INTERVAL)
+                
+            case TournamentPeriod.CONTEST:
+                # Validators don't do anything during contest
+                logger.debug("Contest period - waiting...")
+                await asyncio.sleep(self.CONTEST_INTERVAL)
+                
+            case TournamentPeriod.GRACE_WINDOW:
+                # Run setup if not complete
+                if not self.state.is_setup_complete:
+                    await self._run_setup(tournament)
+                else:
+                    logger.debug("Grace window - setup already complete")
+                    await asyncio.sleep(self.CONTEST_INTERVAL)
+                    
+            case TournamentPeriod.EVALUATION:
+                # Ensure setup is complete
+                if not self.state.is_setup_complete:
+                    logger.warning("Entering evaluation without setup - running setup now")
+                    await self._run_setup(tournament)
+                
+                # Run evaluation loop
+                await self._run_evaluation(tournament)
+                
+            case TournamentPeriod.REVIEW:
+                # Wait for admin review
+                logger.info("Review period - waiting for admin approval...")
+                await asyncio.sleep(self.REVIEW_INTERVAL)
+                
+            case TournamentPeriod.SETTLEMENT:
+                # Run settlement
+                await self._run_settlement(tournament)
+                
+            case TournamentPeriod.COMPLETED:
+                # Tournament complete - reset and wait
+                logger.info("Tournament completed")
+                self.state.reset()
+                await asyncio.sleep(self.COMPLETED_INTERVAL)
+
+    async def _run_setup(self, tournament: Tournament) -> None:
+        """Run setup phase."""
+        if self._setup_manager is None:
+            self._setup_manager = SetupManager(self.config, self.api)
+        
+        try:
+            await self._setup_manager.run_setup(tournament.id)
+            self.state.mark_setup_complete(tournament.id)
+            
+            # Load task config into validator config
+            task_config_path = self.config.paths.workspace / "task_config.yaml"
+            if task_config_path.exists():
+                config_manager = ConfigManager()
+                self.config.task_config = config_manager.load_task_config(task_config_path)
+                
+        except Exception as e:
+            logger.error(f"Setup failed: {e}")
+            raise
+
+    async def _run_evaluation(self, tournament: Tournament) -> None:
+        """Run evaluation loop."""
+        if self._evaluation_orchestrator is None:
+            self._evaluation_orchestrator = EvaluationOrchestrator(
+                config=self.config,
+                api=self.api,
+                validator_hotkey=self.validator_hotkey,
+            )
+        
+        def is_evaluation_period() -> bool:
+            return get_current_period(tournament) == TournamentPeriod.EVALUATION
+        
+        await self._evaluation_orchestrator.run_evaluation_loop(
+            tournament=tournament,
+            is_evaluation_period_fn=is_evaluation_period,
+        )
+
+    async def _run_settlement(self, tournament: Tournament) -> None:
+        """Run settlement phase."""
+        if self._weight_setter is None:
+            self._weight_setter = WeightSetter(self.config, self.api)
+        
+        def is_settlement_period() -> bool:
+            return get_current_period(tournament) == TournamentPeriod.SETTLEMENT
+        
+        await self._weight_setter.run_settlement(
+            tournament=tournament,
+            is_settlement_period_fn=is_settlement_period,
+        )
+
+
+async def run_validator(config_path: Path) -> None:
+    """
+    Run the validator with the given configuration.
+    
+    Args:
+        config_path: Path to validator configuration file
+    """
+    # Load configuration
+    config = load_config(config_path, ValidatorConfig)
+    
+    # Create and run orchestrator
+    orchestrator = ValidatorOrchestrator(config)
+    await orchestrator.run()
+

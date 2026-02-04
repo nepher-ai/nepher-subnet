@@ -1,0 +1,89 @@
+# Nepher Subnet Docker Compose Configuration
+#
+# Usage:
+#   Miner:     docker-compose run miner submit --path /app/agent
+#   Validator: docker-compose up validator
+
+version: '3.8'
+
+services:
+  # =========================================================================
+  # Miner Service (Lightweight - Submission Only)
+  # =========================================================================
+  miner:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.miner
+    volumes:
+      # Wallet access (read-only)
+      - ${BITTENSOR_WALLET_PATH:-~/.bittensor}:/root/.bittensor:ro
+      # Agent directory (read-only)
+      - ${AGENT_PATH:-.}/agent:/app/agent:ro
+    environment:
+      - NEPHER_API_KEY=${NEPHER_API_KEY}
+      - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament.nepher.ai}
+    networks:
+      - nepher-net
+    profiles:
+      - miner
+
+  # =========================================================================
+  # Validator Service (GPU Required)
+  # =========================================================================
+  validator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.validator
+    volumes:
+      # Wallet access (read-only for coldkey, hotkey needs signing)
+      - ${BITTENSOR_WALLET_PATH:-~/.bittensor}:/root/.bittensor:ro
+      # Configuration (read-only)
+      - ./config:/app/config:ro
+      # Workspace (read-write for evaluation artifacts)
+      - ./workspace:/app/workspace
+      # Environment cache (persistent)
+      - nepher-env-cache:/root/.cache/nepher
+      # Logs (optional, for debugging)
+      - ./logs:/app/logs
+    environment:
+      - NEPHER_API_KEY=${NEPHER_API_KEY}
+      - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament.nepher.ai}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+    networks:
+      - nepher-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "${ISAACLAB_PATH}/isaaclab.sh -p -c 'import nepher_core; print(\"OK\")'"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+
+# =========================================================================
+# Networks
+# =========================================================================
+networks:
+  nepher-net:
+    driver: bridge
+
+# =========================================================================
+# Volumes
+# =========================================================================
+volumes:
+  # Persistent cache for downloaded environments
+  nepher-env-cache:
+    driver: local
+

@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nepher-subnet"
+version = "1.0.0"
+description = "Nepher Subnet - Bittensor Subnet 49 Robotics Tournament Platform"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Nepher Team", email = "team@nepher.ai"}
+]
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "bittensor>=7.0.0",
+    "bittensor-wallet>=2.0.0",
+    "httpx>=0.25.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "tenacity>=8.2.0",
+    "structlog>=23.0.0",
+    "aiofiles>=23.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+validator = [
+    "nepher>=0.1.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+nepher-miner = "miner.__main__:main"
+nepher-validator = "validator.__main__:main"
+
+[project.urls]
+Homepage = "https://nepher.ai"
+Repository = "https://github.com/nepher-ai/nepher-subnet"
+Documentation = "https://docs.nepher.ai"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nepher_core*", "miner*", "validator*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --cov=nepher_core --cov=miner --cov=validator"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
