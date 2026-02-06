@@ -1,7 +1,7 @@
 # Nepher Validator Dockerfile
 # Based on NVIDIA Isaac Sim for evaluation capability
 
-FROM nvcr.io/nvidia/isaac-sim:4.2.0
+FROM nvcr.io/nvidia/isaac-sim:5.1.0
 
 # Set environment
 ENV PYTHONDONTWRITEBYTECODE=1
