@@ -18,7 +18,7 @@ class Tournament(BaseModel):
 
     # Timestamps (Unix timestamps) - optional to handle varying API responses
     contest_start_time: Optional[int] = None
-    grace_window_start_time: Optional[int] = None
+    submit_window_start_time: Optional[int] = None
     contest_end_time: Optional[int] = None
     evaluation_end_time: Optional[int] = None
     reward_end_time: Optional[int] = None

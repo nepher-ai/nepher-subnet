@@ -22,7 +22,7 @@ class TournamentPeriod(Enum):
     
     NO_TOURNAMENT = "no_tournament"
     CONTEST = "contest"
-    GRACE_WINDOW = "grace_window"
+    SUBMIT_WINDOW = "submit_window"
     EVALUATION = "evaluation"
     REVIEW = "review"
     REWARD = "reward"
@@ -57,13 +57,13 @@ def get_current_period(
     if current_time < tournament.contest_start_time:
         return TournamentPeriod.NO_TOURNAMENT
     
-    # Contest period (before grace window)
-    if current_time < tournament.grace_window_start_time:
+    # Contest period (before submit window)
+    if current_time < tournament.submit_window_start_time:
         return TournamentPeriod.CONTEST
     
-    # Grace window (between grace_window_start and contest_end)
+    # Submit window (between submit_window_start and contest_end)
     if current_time < tournament.contest_end_time:
-        return TournamentPeriod.GRACE_WINDOW
+        return TournamentPeriod.SUBMIT_WINDOW
     
     # Evaluation period
     if current_time < tournament.evaluation_end_time:

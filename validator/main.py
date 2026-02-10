@@ -36,7 +36,7 @@ class ValidatorOrchestrator:
     
     Manages the complete validator lifecycle:
     1. Monitor for active tournaments
-    2. Run setup during grace window
+    2. Run setup during submit window
     3. Evaluate agents during evaluation period
     4. Set weights during reward period
     5. Reset and wait for next tournament
@@ -150,12 +150,12 @@ class ValidatorOrchestrator:
                 logger.debug("Contest period - waiting...")
                 await asyncio.sleep(self.CONTEST_INTERVAL)
                 
-            case TournamentPeriod.GRACE_WINDOW:
+            case TournamentPeriod.SUBMIT_WINDOW:
                 # Run setup if not complete
                 if not self.state.is_setup_complete:
                     await self._run_setup(tournament)
                 else:
-                    logger.debug("Grace window - setup already complete")
+                    logger.debug("Submit window - setup already complete")
                     await asyncio.sleep(self.CONTEST_INTERVAL)
                     
             case TournamentPeriod.EVALUATION:

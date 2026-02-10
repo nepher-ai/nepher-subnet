@@ -49,7 +49,7 @@ class TestTournamentAPI:
             "network": "finney",
             "subnet_uid": 49,
             "contest_start_time": 1000000,
-            "grace_window_start_time": 1100000,
+            "submit_window_start_time": 1100000,
             "contest_end_time": 1200000,
             "evaluation_end_time": 1300000,
             "reward_end_time": 1400000,
