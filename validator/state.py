@@ -25,7 +25,7 @@ class TournamentPeriod(Enum):
     GRACE_WINDOW = "grace_window"
     EVALUATION = "evaluation"
     REVIEW = "review"
-    SETTLEMENT = "settlement"
+    REWARD = "reward"
     COMPLETED = "completed"
 
 
@@ -73,9 +73,9 @@ def get_current_period(
     if tournament.status == "review":
         return TournamentPeriod.REVIEW
     
-    # Settlement period
-    if current_time < tournament.settlement_end_time:
-        return TournamentPeriod.SETTLEMENT
+    # Reward period
+    if current_time < tournament.reward_end_time:
+        return TournamentPeriod.REWARD
     
     # Completed
     return TournamentPeriod.COMPLETED

@@ -4,7 +4,7 @@ Validator main orchestrator.
 The central coordinator that manages the validator lifecycle:
 - Tournament monitoring
 - State machine transitions
-- Phase handlers (setup, evaluation, settlement)
+- Phase handlers (setup, evaluation, reward)
 """
 
 import asyncio
@@ -25,7 +25,7 @@ from validator.state import (
 )
 from validator.setup import SetupManager
 from validator.evaluation import EvaluationOrchestrator
-from validator.settlement import WeightSetter
+from validator.reward import WeightSetter
 
 logger = get_logger(__name__)
 
@@ -38,7 +38,7 @@ class ValidatorOrchestrator:
     1. Monitor for active tournaments
     2. Run setup during grace window
     3. Evaluate agents during evaluation period
-    4. Set weights during settlement period
+    4. Set weights during reward period
     5. Reset and wait for next tournament
     """
 
@@ -172,9 +172,9 @@ class ValidatorOrchestrator:
                 logger.info("Review period - waiting for admin approval...")
                 await asyncio.sleep(self.REVIEW_INTERVAL)
                 
-            case TournamentPeriod.SETTLEMENT:
-                # Run settlement
-                await self._run_settlement(tournament)
+            case TournamentPeriod.REWARD:
+                # Run reward
+                await self._run_reward(tournament)
                 
             case TournamentPeriod.COMPLETED:
                 # Tournament complete - reset and wait
@@ -218,17 +218,17 @@ class ValidatorOrchestrator:
             is_evaluation_period_fn=is_evaluation_period,
         )
 
-    async def _run_settlement(self, tournament: Tournament) -> None:
-        """Run settlement phase."""
+    async def _run_reward(self, tournament: Tournament) -> None:
+        """Run reward phase."""
         if self._weight_setter is None:
             self._weight_setter = WeightSetter(self.config, self.api)
         
-        def is_settlement_period() -> bool:
-            return get_current_period(tournament) == TournamentPeriod.SETTLEMENT
+        def is_reward_period() -> bool:
+            return get_current_period(tournament) == TournamentPeriod.REWARD
         
-        await self._weight_setter.run_settlement(
+        await self._weight_setter.run_reward(
             tournament=tournament,
-            is_settlement_period_fn=is_settlement_period,
+            is_reward_period_fn=is_reward_period,
         )
 
 

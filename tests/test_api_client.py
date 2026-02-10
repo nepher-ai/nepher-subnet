@@ -52,7 +52,7 @@ class TestTournamentAPI:
             "grace_window_start_time": 1100000,
             "contest_end_time": 1200000,
             "evaluation_end_time": 1300000,
-            "settlement_end_time": 1400000,
+            "reward_end_time": 1400000,
         }
 
         with patch.object(api, "_request", new_callable=AsyncMock) as mock_request:

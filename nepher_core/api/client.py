@@ -2,7 +2,7 @@
 Tournament API Client.
 
 Unified API client for tournament backend operations.
-Used by both miners (submission) and validators (evaluation, settlement).
+Used by both miners (submission) and validators (evaluation, reward).
 """
 
 import asyncio
@@ -45,7 +45,7 @@ class TournamentAPI:
     - Tournament management (get active, configs)
     - Agent operations (upload, download, list)
     - Evaluation operations (submit, in-progress)
-    - Settlement operations (get winner)
+    - Reward operations (get winner)
     """
 
     DEFAULT_TIMEOUT = 30.0
@@ -254,7 +254,7 @@ class TournamentAPI:
 
     async def get_winner_hotkey(self, tournament_id: str) -> WinnerInfo:
         """
-        Get winner information for settlement.
+        Get winner information for reward.
         
         Args:
             tournament_id: Tournament ID

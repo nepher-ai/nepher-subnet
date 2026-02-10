@@ -9,7 +9,7 @@ class Tournament(BaseModel):
     """Tournament model."""
 
     id: str
-    status: str  # pending, active, review, settlement, done, cancelled
+    status: str  # pending, active, review, reward, done, cancelled
     
     # Optional fields with defaults
     name: Optional[str] = None
@@ -21,7 +21,7 @@ class Tournament(BaseModel):
     grace_window_start_time: Optional[int] = None
     contest_end_time: Optional[int] = None
     evaluation_end_time: Optional[int] = None
-    settlement_end_time: Optional[int] = None
+    reward_end_time: Optional[int] = None
 
     # Optional fields
     description: Optional[str] = None
@@ -92,7 +92,7 @@ class Evaluation(BaseModel):
 
 
 class WinnerInfo(BaseModel):
-    """Winner information for settlement."""
+    """Winner information for reward."""
 
     winner_approved: bool = False
     winner_hotkey: Optional[str] = None

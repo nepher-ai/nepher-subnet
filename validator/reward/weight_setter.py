@@ -1,5 +1,5 @@
 """
-Weight setting logic for settlement phase.
+Weight setting logic for reward phase.
 
 Handles:
 - Querying winner from API
@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 
 class WeightSetter:
     """
-    Handles weight setting during settlement phase.
+    Handles weight setting during reward phase.
     
     Responsibilities:
     - Query winner from tournament API
@@ -77,24 +77,24 @@ class WeightSetter:
     def _get_metagraph(self) -> bt.Metagraph:
         """Get and cache metagraph."""
         subtensor = self._get_subtensor()
-        # Always refresh metagraph for settlement
+        # Always refresh metagraph for reward
         self._metagraph = get_metagraph(subtensor, self.config.subnet.subnet_uid)
         return self._metagraph
 
-    async def run_settlement(
+    async def run_reward(
         self,
         tournament: Tournament,
-        is_settlement_period_fn,
+        is_reward_period_fn,
     ) -> None:
         """
-        Run settlement phase - set weights to winner.
+        Run reward phase - set weights to winner.
         
         Args:
             tournament: Current tournament
-            is_settlement_period_fn: Function that returns True if in settlement
+            is_reward_period_fn: Function that returns True if in reward
         """
         logger.info("=" * 60)
-        logger.info("Starting settlement phase")
+        logger.info("Starting reward phase")
         logger.info("=" * 60)
         
         # Get metagraph (needed for weight setting)
@@ -107,17 +107,17 @@ class WeightSetter:
         # Set weights
         await self._set_weights(winner_uid, metagraph)
         
-        # Wait for settlement period to end
-        logger.info("Waiting for settlement period to end...")
-        while is_settlement_period_fn():
+        # Wait for reward period to end
+        logger.info("Waiting for reward period to end...")
+        while is_reward_period_fn():
             await asyncio.sleep(60)
         
-        # After settlement ends, burn on UID 0
-        logger.info("Settlement period ended - burning on UID 0")
+        # After reward ends, burn on UID 0
+        logger.info("Reward period ended - burning on UID 0")
         await self._set_weights(self.BURN_UID, metagraph)
         
         logger.info("=" * 60)
-        logger.info("Settlement phase complete")
+        logger.info("Reward phase complete")
         logger.info("=" * 60)
 
     async def _get_winner_uid(

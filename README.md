@@ -31,7 +31,7 @@ Nepher is a decentralized robotics tournament platform on Bittensor that enables
 
 ```
 ┌─────────────┬─────────────┬─────────────┬─────────────┬─────────────────┐
-│   CONTEST   │    GRACE    │ EVALUATION  │   REVIEW    │   SETTLEMENT    │
+│   CONTEST   │    GRACE    │ EVALUATION  │   REVIEW    │     REWARD      │
 │   PERIOD    │   WINDOW    │   PERIOD    │   STAGE     │    PERIOD       │
 ├─────────────┼─────────────┼─────────────┼─────────────┼─────────────────┤
 │ Miners      │ Eligibility │ Validators  │ Admin       │ Winner gets     │
