@@ -17,6 +17,8 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Any
 
+import yaml
+
 from nepher_core.api import TournamentAPI, Agent
 from nepher_core.config import ValidatorConfig
 from nepher_core.utils.helpers import (
@@ -219,6 +221,56 @@ class AgentEvaluator:
             else:
                 logger.debug(f"Registered environments: {stdout[:200]}...")
 
+    def _resolve_policy_path(self) -> Optional[str]:
+        """Resolve the path to the agent's best policy checkpoint.
+        
+        The agent archive is expected to contain:
+            agent_registry/best_policy/best_policy.pt
+        
+        Returns:
+            Absolute path to the policy checkpoint, or None if not found.
+        """
+        policy_file = self.registry_path / "best_policy" / "best_policy.pt"
+        if policy_file.exists():
+            return str(policy_file.resolve())
+        
+        logger.warning(
+            f"Policy checkpoint not found at expected path: {policy_file}"
+        )
+        return None
+
+    def _build_eval_config(self) -> Path:
+        """Build an evaluation config YAML that includes the agent's policy_path.
+        
+        Reads the base task_config.yaml (downloaded from the API during setup)
+        and injects the resolved policy_path so that evaluate.py loads the
+        agent's trained policy instead of using random actions.
+        
+        Returns:
+            Path to the evaluation config YAML file (written to workspace).
+        """
+        task_config_path = self.workspace / "task_config.yaml"
+        if not task_config_path.exists():
+            raise EvaluationError(
+                f"Task config not found: {task_config_path}",
+                recoverable=False,
+            )
+        
+        with open(task_config_path, "r") as f:
+            config_data = yaml.safe_load(f)
+        
+        # Inject the resolved policy path
+        policy_path = self._resolve_policy_path()
+        config_data["policy_path"] = policy_path
+        logger.info(f"Resolved policy_path: {policy_path}")
+        
+        # Write the evaluation-specific config
+        eval_config_path = self.workspace / "eval_config.yaml"
+        with open(eval_config_path, "w") as f:
+            yaml.dump(config_data, f, default_flow_style=False)
+        
+        return eval_config_path
+
     async def _run_evaluation(self) -> dict[str, Any]:
         """Run the actual evaluation."""
         logger.info("Running evaluation...")
@@ -231,8 +283,8 @@ class AgentEvaluator:
                 recoverable=False,
             )
         
-        # Task config path
-        task_config_path = self.workspace / "task_config.yaml"
+        # Build eval config with the agent's policy_path injected
+        eval_config_path = self._build_eval_config()
         
         # Run evaluation (cwd = eval_repo)
         #
@@ -257,7 +309,7 @@ class AgentEvaluator:
             [
                 sys.executable, "-c", bootstrap,
                 str(eval_script),
-                "--config", str(task_config_path),
+                "--config", str(eval_config_path),
                 "--headless",
             ],
             cwd=eval_cwd,
@@ -343,10 +395,11 @@ class AgentEvaluator:
                 timeout=60,
             )
         
-        # Clean result files (workspace path + eval_repo cwd fallback)
+        # Clean result / temp config files (workspace path + eval_repo cwd fallback)
         for rp in [
             self.result_path,
             self.config.paths.eval_repo / "evaluation_result.json",
+            self.workspace / "eval_config.yaml",
         ]:
             if rp.exists():
                 rp.unlink()
