@@ -12,6 +12,7 @@ Handles the complete evaluation flow for a single agent:
 
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Optional, Any
@@ -142,7 +143,7 @@ class AgentEvaluator:
         if is_module_installed(task_module):
             logger.debug(f"Uninstalling existing module: {task_module}")
             await run_command_async(
-                ["pip", "uninstall", "-y", task_module],
+                [sys.executable, "-m", "pip", "uninstall", "-y", task_module],
                 timeout=60,
             )
         
@@ -194,7 +195,7 @@ class AgentEvaluator:
         
         # Install module
         return_code, stdout, stderr = await run_command_async(
-            ["pip", "install", "-e", str(source_path)],
+            [sys.executable, "-m", "pip", "install", "-e", str(source_path)],
             timeout=300,
         )
         
@@ -206,7 +207,7 @@ class AgentEvaluator:
         list_envs_script = self.registry_path / "scripts" / "list_envs.py"
         if list_envs_script.exists():
             return_code, stdout, stderr = await run_command_async(
-                ["python", str(list_envs_script)],
+                [sys.executable, str(list_envs_script)],
                 timeout=60,
             )
             if return_code != 0:
@@ -296,7 +297,7 @@ class AgentEvaluator:
         # Uninstall module
         if is_module_installed(task_module):
             await run_command_async(
-                ["pip", "uninstall", "-y", task_module],
+                [sys.executable, "-m", "pip", "uninstall", "-y", task_module],
                 timeout=60,
             )
         

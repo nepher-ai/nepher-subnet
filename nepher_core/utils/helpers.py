@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import shutil
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 from typing import Optional, List
@@ -144,7 +145,7 @@ def is_module_installed(module_name: str) -> bool:
     """
     try:
         result = subprocess.run(
-            ["pip", "show", module_name],
+            [sys.executable, "-m", "pip", "show", module_name],
             capture_output=True,
             text=True,
         )

@@ -10,6 +10,7 @@ Handles:
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional, List
 
@@ -196,7 +197,7 @@ async def setup_eval_repo(
     # Install the repo
     logger.info("Installing evaluation repo...")
     return_code, stdout, stderr = await run_command_async(
-        ["pip", "install", "-e", str(target_path)],
+        [sys.executable, "-m", "pip", "install", "-e", str(target_path)],
         timeout=300,
     )
     if return_code != 0:
