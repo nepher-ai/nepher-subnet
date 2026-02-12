@@ -308,8 +308,12 @@ Nepher Validator Starting
 Validator Hotkey: 5Gx...
 Network: finney
 Subnet UID: 49
-...
-No active tournament. Waiting...
+============================================================
+Entering main loop    api_url=https://tournament-api.nepher.ai  poll_interval=300s
+[iter 1] Checking for active tournament...
+Fetching active tournament from https://tournament-api.nepher.ai/api/v1/tournaments/active
+No active tournament (404)
+No active tournament. Sleeping 300s before next check...
 ```
 
 ### 6g. Managing the Docker Validator
@@ -320,6 +324,9 @@ docker compose down
 
 # Restart the validator
 docker compose restart validator
+
+# Rebuild and restart (required after code updates)
+docker compose up -d --build validator
 
 # View real-time logs
 docker compose logs -f validator
@@ -587,9 +594,13 @@ tail -f /var/log/nepher-validator.log
 
 | Log Message | Meaning |
 |---|---|
-| `No active tournament. Waiting...` | Normal — no tournament is running right now. Polls every 5 min. |
-| `Contest period - waiting...` | Tournament is in contest phase. Validators wait. |
-| `Starting validator setup phase` | Submit window started. Validator downloading configs & envs. |
+| `Entering main loop  api_url=...` | Validator initialized and starting to poll the API. |
+| `[iter N] Checking for active tournament...` | Polling the API for an active tournament (iteration counter). |
+| `Fetching active tournament from ...` | HTTP request being sent to the tournament API. |
+| `No active tournament. Sleeping 300s...` | Normal — no tournament running right now. Polls every 5 min. |
+| `Active tournament found: ... (status=...)` | A tournament was detected. Validator will act on it. |
+| `[iter N] Tournament ... — period=CONTEST` | Tournament is in contest phase. Validators wait. |
+| `Starting validator setup phase` | Submit window started. Downloading configs & envs. |
 | `Setup phase complete!` | Environments and configs ready for evaluation. |
 | `Starting evaluation loop` | Evaluation period started. Processing submitted agents. |
 | `Found X pending agents` | Agents are being evaluated. |
@@ -597,6 +608,7 @@ tail -f /var/log/nepher-validator.log
 | `Starting reward phase` | Setting weights to the tournament winner. |
 | `✅ Weights set successfully to UID X` | Weights committed on chain. |
 | `Tournament completed` | Cycle done. Resets and waits for next tournament. |
+| `[iter N] Main loop error: ...` | Something went wrong. Check the error message. Retries in 60s. |
 
 ---
 
@@ -694,6 +706,25 @@ docker compose logs --tail 50 validator
 # - Missing API key
 # - Wallet not mounted properly
 # - GPU not accessible
+```
+
+### Validator Stuck After Startup Logs / No Output After "Subnet UID: 49"
+
+If the validator prints the startup banner but shows no further output, the API call is likely hanging (network/DNS issue inside the container).
+
+```bash
+# 1. Rebuild the image to pick up latest logging improvements
+docker compose up -d --build validator
+
+# 2. Follow logs — you should now see "Entering main loop" and iteration logs
+docker compose logs -f validator
+
+# 3. If the API call hangs, test connectivity from inside the container
+docker compose exec validator bash -c "curl -sI https://tournament-api.nepher.ai/api/v1/tournaments/active"
+
+# 4. If DNS fails, check Docker network or add a DNS server to docker-compose.yaml:
+#    dns:
+#      - 8.8.8.8
 ```
 
 ---
