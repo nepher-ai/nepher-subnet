@@ -64,6 +64,9 @@ services:
       - NEPHER_CACHE_DIR=/root/.cache/nepher
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
+      # Lazy CUDA module loading avoids eagerly grabbing driver state that
+      # would break multiprocessing workers using the 'fork' start method.
+      - CUDA_MODULE_LOADING=LAZY
       - ACCEPT_EULA=Y
       - PRIVACY_CONSENT=Y
     deploy:

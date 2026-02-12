@@ -235,11 +235,28 @@ class AgentEvaluator:
         task_config_path = self.workspace / "task_config.yaml"
         
         # Run evaluation (cwd = eval_repo)
+        #
+        # We launch evaluate.py through a tiny bootstrap that forces
+        # multiprocessing.set_start_method('spawn').  The default on Linux
+        # is 'fork', which copies the parent's CUDA driver state into
+        # child workers.  Because evaluate.py (or its imports) may touch
+        # CUDA before spawning workers, the forked children inherit a
+        # broken driver handle and fail with:
+        #   RuntimeError: CUDA driver initialization failed
+        # Using 'spawn' gives every worker a fresh process and clean CUDA
+        # initialisation.
         eval_cwd = self.config.paths.eval_repo
         timeout = self.config.retry.evaluation_timeout_seconds
+        bootstrap = (
+            "import multiprocessing, sys;"
+            " multiprocessing.set_start_method('spawn', force=True);"
+            " sys.argv = sys.argv[1:];"
+            " import runpy; runpy.run_path(sys.argv[0], run_name='__main__')"
+        )
         return_code, stdout, stderr = await run_command_async(
             [
-                sys.executable, str(eval_script),
+                sys.executable, "-c", bootstrap,
+                str(eval_script),
                 "--config", str(task_config_path),
                 "--headless",
             ],
