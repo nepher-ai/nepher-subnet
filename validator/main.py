@@ -169,17 +169,13 @@ class ValidatorOrchestrator:
                 await asyncio.sleep(self.CONTEST_INTERVAL)
                 
             case TournamentPeriod.SUBMIT_WINDOW:
-                # Run setup if not complete
-                if not self.state.is_setup_complete:
-                    await self._run_setup(tournament)
-                else:
-                    logger.debug("Submit window - setup already complete")
-                    await asyncio.sleep(self.CONTEST_INTERVAL)
+                # Validators wait during submit window
+                logger.debug("Submit window - waiting for evaluation period...")
+                await asyncio.sleep(self.CONTEST_INTERVAL)
                     
             case TournamentPeriod.EVALUATION:
-                # Ensure setup is complete
+                # Run setup if not complete
                 if not self.state.is_setup_complete:
-                    logger.warning("Entering evaluation without setup - running setup now")
                     await self._run_setup(tournament)
                 
                 # Run evaluation loop
