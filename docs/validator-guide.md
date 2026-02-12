@@ -632,7 +632,7 @@ nvidia-smi
 dpkg -l | grep nvidia-container-toolkit
 
 # 3. Test GPU access from a Docker container
-docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
 
 # 4. If step 3 fails, install / reconfigure the toolkit:
 sudo apt install -y nvidia-container-toolkit
