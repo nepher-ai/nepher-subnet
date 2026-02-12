@@ -32,6 +32,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.validator
+    # Explicit NVIDIA runtime (requires nvidia-container-toolkit).
+    # Works with all Docker Compose versions; the deploy.resources block
+    # below is the newer equivalent but is ignored by some older runtimes.
+    runtime: nvidia
     volumes:
       # Wallet access (only wallets dir, read-only; bittensor init creates
       # other dirs like /root/.bittensor/miners which must be writable)

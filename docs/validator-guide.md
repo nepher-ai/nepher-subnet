@@ -614,19 +614,41 @@ tail -f /var/log/nepher-validator.log
 
 ## 11. Troubleshooting
 
-### GPU Not Detected in Docker
+### CUDA Driver Initialization Failed / GPU Not Detected in Docker
+
+If the validator starts but evaluation fails with:
+
+```
+RuntimeError: CUDA driver initialization failed, you might not have a CUDA gpu.
+```
+
+This means the container cannot access the host GPU. Follow these steps **on the host** (not inside the container):
 
 ```bash
-# Verify NVIDIA runtime is configured
-docker info | grep -i nvidia
+# 1. Verify the host GPU works
+nvidia-smi
 
-# Test GPU access
+# 2. Verify the NVIDIA Container Toolkit is installed
+dpkg -l | grep nvidia-container-toolkit
+
+# 3. Test GPU access from a Docker container
 docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
 
-# If it fails, reconfigure the runtime:
+# 4. If step 3 fails, install / reconfigure the toolkit:
+sudo apt install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
+
+# 5. Retry step 3 — it must succeed before the validator will work
+
+# 6. Rebuild and restart the validator
+docker compose up -d --build validator
+docker compose logs -f validator
 ```
+
+> **Tip:** The entrypoint now runs a GPU pre-flight check. If CUDA is not
+> accessible, the container will exit immediately with a clear error message
+> instead of failing deep inside evaluation.
 
 ### Wallet Not Found
 
