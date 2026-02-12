@@ -89,6 +89,25 @@ def verify_nepher_installed() -> bool:
         return False
 
 
+def _ensure_name_symlink(cache_manager, original_name: str, resolved_name: str) -> None:
+    """Create a symlink from the original env name to the resolved (cached) name.
+
+    This allows ``nepher.load_env(original_name)`` to find the environment
+    that was downloaded and cached under its resolved server-side ID.
+    """
+    link_path = cache_manager.get_env_cache_path(original_name)
+    target_path = cache_manager.get_env_cache_path(resolved_name)
+
+    if link_path.exists() or link_path.is_symlink():
+        return
+
+    try:
+        link_path.symlink_to(target_path)
+        logger.info(f"  Created cache symlink: {original_name} → {resolved_name}")
+    except OSError as exc:
+        logger.warning(f"  Could not create symlink {link_path} → {target_path}: {exc}")
+
+
 async def download_environments(
     env_ids: List[str],
     cache_path: Optional[Path] = None,
@@ -137,6 +156,7 @@ async def download_environments(
             # Re-check cache with resolved ID (may differ from the name)
             if actual_env_id != env_id and cache_manager.is_cached(actual_env_id):
                 logger.info(f"  Already cached (resolved {env_id} → {actual_env_id})")
+                _ensure_name_symlink(cache_manager, env_id, actual_env_id)
                 continue
             
             # Download environment bundle
@@ -155,6 +175,10 @@ async def download_environments(
                 zip_path.unlink()
             
             logger.info(f"  Downloaded and cached: {actual_env_id}")
+            
+            # Create symlink so load_env(env_id) can find it by original name
+            if actual_env_id != env_id:
+                _ensure_name_symlink(cache_manager, env_id, actual_env_id)
             
     except ImportError:
         logger.error("nepher package not installed - cannot download environments")
@@ -269,6 +293,11 @@ class SetupManager:
         logger.info("Step 4: Downloading required environments...")
         env_ids = self._get_required_env_ids()
         await download_environments(env_ids, self.config.paths.env_cache)
+        
+        # Propagate the cache directory to the process environment so that
+        # any subprocess (e.g. the evaluation script) using the nepher library
+        # resolves the same cache location.
+        os.environ["NEPHER_CACHE_DIR"] = str(self.config.paths.env_cache)
         
         # Step 5: Setup evaluation repo
         logger.info("Step 5: Setting up evaluation repository...")
