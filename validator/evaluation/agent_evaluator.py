@@ -149,8 +149,12 @@ class AgentEvaluator:
         
         # Clean workspace
         clean_directory(self.registry_path)
-        if self.result_path.exists():
-            self.result_path.unlink()
+        for rp in [
+            self.result_path,
+            self.config.paths.eval_repo / "evaluation_result.json",
+        ]:
+            if rp.exists():
+                rp.unlink()
 
     async def _prepare_agent(self, agent: Agent) -> None:
         """Download and extract agent."""
@@ -230,27 +234,47 @@ class AgentEvaluator:
         # Task config path
         task_config_path = self.workspace / "task_config.yaml"
         
-        # Run evaluation
+        # Run evaluation (cwd = eval_repo)
+        eval_cwd = self.config.paths.eval_repo
         timeout = self.config.retry.evaluation_timeout_seconds
         return_code, stdout, stderr = await run_command_async(
             [
                 sys.executable, str(eval_script),
                 "--config", str(task_config_path),
                 "--headless",
-                "--result-path", str(self.result_path),
             ],
-            cwd=self.config.paths.eval_repo,
+            cwd=eval_cwd,
             timeout=timeout,
         )
         
-        if return_code != 0:
-            raise EvaluationError(f"Evaluation script failed: {stderr}")
+        # Always log output for debugging
+        if stdout:
+            logger.info(f"Evaluation stdout (last 2000 chars):\n{stdout[-2000:]}")
+        if stderr:
+            logger.warning(f"Evaluation stderr (last 2000 chars):\n{stderr[-2000:]}")
         
-        # Load results
-        if not self.result_path.exists():
+        if return_code != 0:
+            raise EvaluationError(
+                f"Evaluation script failed (exit={return_code}): {stderr[-500:]}"
+            )
+        
+        # evaluate.py writes evaluation_result.json relative to its cwd (eval_repo)
+        cwd_result_path = eval_cwd / "evaluation_result.json"
+        
+        # Check both possible locations
+        result_file = None
+        if self.result_path.exists():
+            result_file = self.result_path
+        elif cwd_result_path.exists():
+            result_file = cwd_result_path
+            # Move it to the expected workspace location for consistency
+            shutil.move(str(cwd_result_path), str(self.result_path))
+            result_file = self.result_path
+        
+        if result_file is None:
             raise EvaluationError("evaluation_result.json not generated")
         
-        with open(self.result_path, "r") as f:
+        with open(result_file, "r") as f:
             result = json.load(f)
         
         logger.info(f"Evaluation score: {result.get('score', 'N/A')}")
@@ -302,9 +326,13 @@ class AgentEvaluator:
                 timeout=60,
             )
         
-        # Clean result file
-        if self.result_path.exists():
-            self.result_path.unlink()
+        # Clean result files (workspace path + eval_repo cwd fallback)
+        for rp in [
+            self.result_path,
+            self.config.paths.eval_repo / "evaluation_result.json",
+        ]:
+            if rp.exists():
+                rp.unlink()
         
         # Clean registry
         clean_directory(self.registry_path)
