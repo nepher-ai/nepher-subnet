@@ -9,6 +9,8 @@ ENV PYTHONUNBUFFERED=1
 ENV ACCEPT_EULA=Y
 ENV ISAACSIM_PATH=/isaac-sim
 ENV ISAACLAB_PATH=/isaac-lab
+# Fix: Isaac Sim sets TERM=ansi+tabs which is unrecognized by many tools
+ENV TERM=xterm
 
 # Switch to root for system package installation
 # (Isaac Sim base image runs as non-root by default)
