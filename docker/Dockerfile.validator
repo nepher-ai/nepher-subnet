@@ -36,12 +36,16 @@ RUN git clone --depth 1 https://github.com/isaac-sim/IsaacLab.git ${ISAACLAB_PAT
 # Use Isaac Lab's Python environment
 ENV PYTHON_CMD="${ISAACLAB_PATH}/isaaclab.sh -p"
 
+# Fix broken pip bundled with Isaac Sim (corrupted pip._vendor.packaging)
+RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m ensurepip --upgrade \
+    && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --upgrade pip
+
 # Copy requirements and install
 COPY requirements.txt .
 RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir -r requirements.txt
 
 # Install nepher (envhub)
-RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install nepher
+RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir nepher
 
 # Copy source code
 COPY nepher_core/ ./nepher_core/
