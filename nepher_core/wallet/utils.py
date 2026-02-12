@@ -144,6 +144,38 @@ def create_file_info(
     return f"{miner_hotkey}:{content_hash}:{timestamp}"
 
 
+def create_eval_info(
+    validator_hotkey: str,
+    tournament_id: str,
+    agent_id: Optional[str] = None,
+    timestamp: Optional[int] = None,
+    log_hash: Optional[str] = None,
+) -> str:
+    """
+    Create eval_info string for signing evaluation operations.
+    
+    Format: "hotkey:tournament_id:agent_id:timestamp[:log_hash]"
+    
+    Args:
+        validator_hotkey: Validator's SS58 hotkey address
+        tournament_id: Tournament ID
+        agent_id: Agent ID (empty string if clearing in-progress)
+        timestamp: Unix timestamp (auto-generated if None)
+        log_hash: Optional SHA256 hash of log file
+        
+    Returns:
+        Formatted eval_info for signing
+    """
+    import time as _time
+    if timestamp is None:
+        timestamp = int(_time.time())
+    aid = agent_id or ""
+    info = f"{validator_hotkey}:{tournament_id}:{aid}:{timestamp}"
+    if log_hash:
+        info = f"{info}:{log_hash}"
+    return info
+
+
 def get_subtensor(network: str = "finney") -> bt.Subtensor:
     """
     Get a Bittensor subtensor connection.

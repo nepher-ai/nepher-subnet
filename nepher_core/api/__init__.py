@@ -5,6 +5,7 @@ from nepher_core.api.models import (
     Tournament,
     Agent,
     Evaluation,
+    EvaluationToken,
     WinnerInfo,
     AgentListResponse,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "Tournament",
     "Agent",
     "Evaluation",
+    "EvaluationToken",
     "WinnerInfo",
     "AgentListResponse",
     "APIError",

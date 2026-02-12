@@ -25,6 +25,7 @@ from nepher_core.api.models import (
     AgentListResponse,
     WinnerInfo,
     UploadToken,
+    EvaluationToken,
 )
 from nepher_core.api.exceptions import (
     APIError,
@@ -58,6 +59,7 @@ class TournamentAPI:
         api_key: str,
         base_url: str,
         timeout: float = DEFAULT_TIMEOUT,
+        wallet: Optional[Any] = None,
     ):
         """
         Initialize the API client.
@@ -66,10 +68,13 @@ class TournamentAPI:
             api_key: API key for authentication
             base_url: Base URL of the tournament API
             timeout: Default timeout for requests
+            wallet: Optional Bittensor wallet for signing evaluation requests.
+                    Required for evaluation operations (in-progress, submit).
         """
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.wallet = wallet
         self._client: Optional[httpx.AsyncClient] = None
 
     @property
@@ -489,8 +494,30 @@ class TournamentAPI:
         return output_path
 
     # =========================================================================
-    # Evaluation Endpoints
+    # Evaluation Endpoints (CLI two-step verify → submit with wallet signature)
     # =========================================================================
+
+    def _require_wallet(self) -> None:
+        """Raise if wallet is not configured."""
+        if self.wallet is None:
+            raise APIError(
+                "Wallet is required for evaluation operations. "
+                "Pass wallet= when constructing TournamentAPI.",
+                status_code=0,
+            )
+
+    def _sign_eval_info(self, eval_info: str) -> tuple[str, str]:
+        """
+        Sign an eval_info string using the wallet.
+
+        Returns:
+            (public_key_hex, signature_hex)
+        """
+        from nepher_core.wallet import get_public_key, sign_message
+
+        public_key = get_public_key(self.wallet)
+        signature = sign_message(self.wallet, eval_info)
+        return public_key, signature
 
     async def set_evaluation_in_progress(
         self,
@@ -500,21 +527,35 @@ class TournamentAPI:
     ) -> None:
         """
         Mark evaluation as in-progress.
-        
+
         Args:
             tournament_id: Tournament ID
             agent_id: Agent ID being evaluated
             validator_hotkey: Validator's hotkey
-            
-        Endpoint: POST /api/v1/evaluations/in-progress
+
+        Endpoint: POST /api/v1/evaluations/in-progress/cli
         """
+        self._require_wallet()
+
+        from nepher_core.wallet import create_eval_info
+
+        eval_info = create_eval_info(
+            validator_hotkey=validator_hotkey,
+            tournament_id=tournament_id,
+            agent_id=agent_id,
+        )
+        public_key, signature = self._sign_eval_info(eval_info)
+
         await self._request(
             "POST",
-            "/api/v1/evaluations/in-progress",
+            "/api/v1/evaluations/in-progress/cli",
             json={
                 "tournament_id": tournament_id,
                 "agent_id": agent_id,
                 "validator_hotkey": validator_hotkey,
+                "public_key": public_key,
+                "eval_info": eval_info,
+                "signature": signature,
             },
         )
         logger.info(f"Marked evaluation in-progress: agent={agent_id}")
@@ -526,23 +567,90 @@ class TournamentAPI:
     ) -> None:
         """
         Clear in-progress status for this validator.
-        
+
         Args:
             tournament_id: Tournament ID
             validator_hotkey: Validator's hotkey
-            
-        Endpoint: POST /api/v1/evaluations/in-progress (with agent_id=null)
+
+        Endpoint: POST /api/v1/evaluations/in-progress/cli (with agent_id=null)
         """
+        self._require_wallet()
+
+        from nepher_core.wallet import create_eval_info
+
+        eval_info = create_eval_info(
+            validator_hotkey=validator_hotkey,
+            tournament_id=tournament_id,
+            agent_id=None,
+        )
+        public_key, signature = self._sign_eval_info(eval_info)
+
         await self._request(
             "POST",
-            "/api/v1/evaluations/in-progress",
+            "/api/v1/evaluations/in-progress/cli",
             json={
                 "tournament_id": tournament_id,
                 "agent_id": None,
                 "validator_hotkey": validator_hotkey,
+                "public_key": public_key,
+                "eval_info": eval_info,
+                "signature": signature,
             },
         )
         logger.debug(f"Cleared in-progress status for validator={validator_hotkey}")
+
+    async def _verify_evaluation_submit(
+        self,
+        tournament_id: str,
+        agent_id: str,
+        validator_hotkey: str,
+        log_file_size: Optional[int] = None,
+        log_hash: Optional[str] = None,
+    ) -> EvaluationToken:
+        """
+        Step 1 of evaluation submission: verify and obtain upload token.
+
+        Args:
+            tournament_id: Tournament ID
+            agent_id: Agent ID
+            validator_hotkey: Validator's hotkey
+            log_file_size: Size of log file in bytes (optional)
+            log_hash: SHA256 hash of log file (optional)
+
+        Returns:
+            EvaluationToken with upload_token
+
+        Endpoint: POST /api/v1/evaluations/submit/verify
+        """
+        self._require_wallet()
+
+        from nepher_core.wallet import create_eval_info
+
+        eval_info = create_eval_info(
+            validator_hotkey=validator_hotkey,
+            tournament_id=tournament_id,
+            agent_id=agent_id,
+            log_hash=log_hash,
+        )
+        public_key, signature = self._sign_eval_info(eval_info)
+
+        body: dict[str, Any] = {
+            "validator_hotkey": validator_hotkey,
+            "public_key": public_key,
+            "eval_info": eval_info,
+            "signature": signature,
+            "tournament_id": tournament_id,
+            "agent_id": agent_id,
+        }
+        if log_file_size is not None:
+            body["log_file_size"] = log_file_size
+
+        response = await self._request(
+            "POST",
+            "/api/v1/evaluations/submit/verify",
+            json=body,
+        )
+        return EvaluationToken(**response.json())
 
     async def submit_evaluation(
         self,
@@ -555,8 +663,8 @@ class TournamentAPI:
         log_file: Optional[Path] = None,
     ) -> None:
         """
-        Submit successful evaluation result.
-        
+        Submit successful evaluation result (two-step verify → submit).
+
         Args:
             tournament_id: Tournament ID
             agent_id: Agent ID
@@ -565,42 +673,69 @@ class TournamentAPI:
             metadata: Evaluation metadata
             summary: Human-readable summary
             log_file: Optional path to logs ZIP
-            
-        Endpoint: POST /api/v1/evaluations/submit
+
+        Endpoint:
+            1. POST /api/v1/evaluations/submit/verify
+            2. POST /api/v1/evaluations/submit (Form + X-Upload-Token)
         """
-        data = {
-            "tournament_id": tournament_id,
-            "agent_id": agent_id,
-            "validator_hotkey": validator_hotkey,
-            "status": "done",
-            "score": score,
-            "metadata": metadata,
-            "summary": summary,
+        import hashlib
+        import json
+
+        # Calculate log hash if log file exists
+        log_hash: Optional[str] = None
+        log_file_size: Optional[int] = None
+        if log_file and log_file.exists():
+            content = log_file.read_bytes()
+            log_hash = hashlib.sha256(content).hexdigest()
+            log_file_size = len(content)
+
+        # Step 1: Verify and get upload token
+        token = await self._verify_evaluation_submit(
+            tournament_id=tournament_id,
+            agent_id=agent_id,
+            validator_hotkey=validator_hotkey,
+            log_file_size=log_file_size,
+            log_hash=log_hash,
+        )
+
+        # Step 2: Submit with Form data + upload token
+        url = self._build_url("/api/v1/evaluations/submit")
+        upload_headers = {
+            "X-API-Key": self.api_key,
+            "Accept": "application/json",
+            "X-Upload-Token": token.upload_token,
         }
 
-        if log_file and log_file.exists():
-            url = self._build_url("/api/v1/evaluations/submit")
-            
-            # Use a separate client for file uploads to avoid Content-Type conflicts
-            upload_headers = {
-                "X-API-Key": self.api_key,
-                "Accept": "application/json",
-            }
-            
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self.UPLOAD_TIMEOUT)) as upload_client:
+        form_data = {
+            "validator_hotkey": validator_hotkey,
+            "score": str(score),
+            "metadata": json.dumps(metadata) if metadata else None,
+            "summary": summary or None,
+        }
+        if log_hash:
+            form_data["log_hash"] = log_hash
+        # Remove None values
+        form_data = {k: v for k, v in form_data.items() if v is not None}
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(self.UPLOAD_TIMEOUT)) as upload_client:
+            if log_file and log_file.exists():
                 with open(log_file, "rb") as f:
                     files = {"log_file": (log_file.name, f, "application/zip")}
                     response = await upload_client.post(
                         url,
-                        data={"data": str(data)},
+                        data=form_data,
                         files=files,
                         headers=upload_headers,
                     )
-            
-            if response.status_code >= 400:
-                self._handle_error_response(response)
-        else:
-            await self._request("POST", "/api/v1/evaluations/submit", json=data)
+            else:
+                response = await upload_client.post(
+                    url,
+                    data=form_data,
+                    headers=upload_headers,
+                )
+
+        if response.status_code >= 400:
+            self._handle_error_response(response)
 
         logger.info(f"Submitted evaluation: agent={agent_id}, score={score}")
 
@@ -612,26 +747,52 @@ class TournamentAPI:
         error_reason: str,
     ) -> None:
         """
-        Submit failed evaluation result.
-        
+        Submit failed evaluation result (two-step verify → submit).
+
+        The backend /submit endpoint marks status as "done" when a score is
+        provided. For failures we submit score=0 with error info in summary
+        so the backend records the evaluation.
+
         Args:
             tournament_id: Tournament ID
             agent_id: Agent ID
             validator_hotkey: Validator's hotkey
             error_reason: Reason for failure
-            
-        Endpoint: POST /api/v1/evaluations/submit (status=failed)
+
+        Endpoint:
+            1. POST /api/v1/evaluations/submit/verify
+            2. POST /api/v1/evaluations/submit (Form + X-Upload-Token)
         """
-        await self._request(
-            "POST",
-            "/api/v1/evaluations/submit",
-            json={
-                "tournament_id": tournament_id,
-                "agent_id": agent_id,
-                "validator_hotkey": validator_hotkey,
-                "status": "failed",
-                "error_reason": error_reason,
-            },
+        # Step 1: Verify and get upload token
+        token = await self._verify_evaluation_submit(
+            tournament_id=tournament_id,
+            agent_id=agent_id,
+            validator_hotkey=validator_hotkey,
         )
+
+        # Step 2: Submit with Form data + upload token (score=0, error in summary)
+        url = self._build_url("/api/v1/evaluations/submit")
+        upload_headers = {
+            "X-API-Key": self.api_key,
+            "Accept": "application/json",
+            "X-Upload-Token": token.upload_token,
+        }
+
+        form_data = {
+            "validator_hotkey": validator_hotkey,
+            "score": "0",
+            "summary": f"[FAILED] {error_reason}",
+        }
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(self.UPLOAD_TIMEOUT)) as upload_client:
+            response = await upload_client.post(
+                url,
+                data=form_data,
+                headers=upload_headers,
+            )
+
+        if response.status_code >= 400:
+            self._handle_error_response(response)
+
         logger.warning(f"Submitted failed evaluation: agent={agent_id}, reason={error_reason}")
 

@@ -57,11 +57,6 @@ class ValidatorOrchestrator:
             config: Validator configuration
         """
         self.config = config
-        self.api = TournamentAPI(
-            api_key=config.api_key,
-            base_url=config.api_url,
-        )
-        
         # Load wallet and get hotkey
         wallet = load_wallet(
             name=config.wallet.name,
@@ -69,6 +64,12 @@ class ValidatorOrchestrator:
             path=config.wallet.path,
         )
         self.validator_hotkey = get_hotkey(wallet)
+        
+        self.api = TournamentAPI(
+            api_key=config.api_key,
+            base_url=config.api_url,
+            wallet=wallet,
+        )
         
         # State manager
         self.state = ValidatorStateManager()

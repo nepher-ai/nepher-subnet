@@ -7,6 +7,7 @@ from nepher_core.wallet.utils import (
     sign_message,
     verify_signature,
     create_file_info,
+    create_eval_info,
 )
 
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     "sign_message",
     "verify_signature",
     "create_file_info",
+    "create_eval_info",
 ]
 

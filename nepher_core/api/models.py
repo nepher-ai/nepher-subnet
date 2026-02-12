@@ -115,6 +115,20 @@ class UploadToken(BaseModel):
         extra = "ignore"
 
 
+class EvaluationToken(BaseModel):
+    """Evaluation upload token response from /evaluations/submit/verify."""
+
+    upload_token: str
+    tournament_id: str
+    agent_id: str
+    expires_at: Optional[datetime] = None
+    max_log_file_size: Optional[int] = None
+    existing_status: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
+
+
 class ConfigResponse(BaseModel):
     """Configuration file response."""
 
