@@ -91,29 +91,69 @@ def verify_nepher_installed() -> bool:
 async def download_environments(
     env_ids: List[str],
     cache_path: Optional[Path] = None,
+    category: str = "navigation",
 ) -> None:
     """
-    Download required environments using nepher.
+    Download required environments using nepher (envhub).
     
     Args:
         env_ids: List of environment IDs to download
         cache_path: Optional custom cache path
+        category: Environment category (default: "navigation")
     """
     try:
-        import nepher
+        from nepher.storage.cache import get_cache_manager
+        from nepher.api.client import get_client
+        from nepher.storage.bundle import BundleManager
+        
+        cache_manager = get_cache_manager(cache_dir=cache_path, category=category)
+        client = get_client()
         
         for env_id in env_ids:
             logger.info(f"Checking environment: {env_id}")
             
             # Check if already cached
-            if nepher.is_cached(env_id):
+            if cache_manager.is_cached(env_id):
                 logger.info(f"  Already cached: {env_id}")
                 continue
             
-            # Download
-            logger.info(f"  Downloading: {env_id}")
-            nepher.download(env_id)
-            logger.info(f"  Downloaded: {env_id}")
+            # Resolve the actual env ID (the env_id in the config may be the
+            # human-readable name rather than the server-side UUID).
+            actual_env_id = env_id
+            try:
+                env_info = client.get_environment(env_id)
+                actual_env_id = env_info.get("id", env_id)
+            except Exception:
+                logger.debug(f"  Could not fetch env by id, searching by name: {env_id}")
+                envs = client.list_environments(category=category, search=env_id, limit=10)
+                matches = [e for e in envs if e.get("original_name") == env_id]
+                if not matches:
+                    matches = [e for e in envs if env_id.lower() in e.get("original_name", "").lower()]
+                if matches:
+                    matches.sort(key=lambda x: x.get("uploaded_at", ""), reverse=True)
+                    actual_env_id = matches[0].get("id", env_id)
+            
+            # Re-check cache with resolved ID (may differ from the name)
+            if actual_env_id != env_id and cache_manager.is_cached(actual_env_id):
+                logger.info(f"  Already cached (resolved {env_id} → {actual_env_id})")
+                continue
+            
+            # Download environment bundle
+            logger.info(f"  Downloading: {actual_env_id}")
+            env_cache_path = cache_manager.get_env_cache_path(actual_env_id)
+            zip_path = env_cache_path.parent / f"{actual_env_id}.zip"
+            
+            client.download_environment(actual_env_id, zip_path)
+            
+            # Extract bundle
+            logger.info(f"  Extracting: {actual_env_id}")
+            BundleManager.extract_bundle(zip_path, env_cache_path)
+            
+            # Clean up zip
+            if zip_path.exists():
+                zip_path.unlink()
+            
+            logger.info(f"  Downloaded and cached: {actual_env_id}")
             
     except ImportError:
         logger.error("nepher package not installed - cannot download environments")
