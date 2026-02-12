@@ -11,6 +11,7 @@ from typing import Optional, Any
 from urllib.parse import urljoin
 
 import httpx
+import yaml
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -169,7 +170,19 @@ class TournamentAPI:
         path: str,
         **kwargs,
     ) -> httpx.Response:
-        """Make an HTTP request with retry logic."""
+        """Make an HTTP request with retry logic.
+        
+        Args:
+            method: HTTP method
+            path: API path
+            expect_json: If True (default), verify the response has a JSON
+                content-type and raise APIError otherwise. Set to False for
+                endpoints that return non-JSON payloads (e.g. YAML configs).
+            **kwargs: Extra arguments forwarded to httpx.
+        """
+        # Pop our custom flag before forwarding kwargs to httpx
+        expect_json = kwargs.pop("expect_json", True)
+
         client = await self._get_client()
         url = self._build_url(path)
         
@@ -182,18 +195,19 @@ class TournamentAPI:
         # Verify the response is JSON when we expect it to be.
         # A common misconfiguration is pointing at a frontend SPA which
         # returns 200 + HTML for every route.
-        content_type = response.headers.get("content-type", "")
-        if response.status_code == 200 and "application/json" not in content_type:
-            body_preview = response.text[:200] if response.text else "(empty)"
-            raise APIError(
-                f"Expected JSON response from {method} {url} but got "
-                f"content-type '{content_type}'. This usually means "
-                f"NEPHER_API_URL ({self.base_url}) is pointing at the "
-                f"frontend app instead of the API backend. "
-                f"Response preview: {body_preview}",
-                status_code=response.status_code,
-                response_body=response.text,
-            )
+        if expect_json:
+            content_type = response.headers.get("content-type", "")
+            if response.status_code == 200 and "application/json" not in content_type:
+                body_preview = response.text[:200] if response.text else "(empty)"
+                raise APIError(
+                    f"Expected JSON response from {method} {url} but got "
+                    f"content-type '{content_type}'. This usually means "
+                    f"NEPHER_API_URL ({self.base_url}) is pointing at the "
+                    f"frontend app instead of the API backend. "
+                    f"Response preview: {body_preview}",
+                    status_code=response.status_code,
+                    response_body=response.text,
+                )
         
         return response
 
@@ -261,7 +275,11 @@ class TournamentAPI:
         response = await self._request(
             "GET",
             f"/api/v1/tournaments/{tournament_id}/config/subnet_config",
+            expect_json=False,
         )
+        content_type = response.headers.get("content-type", "")
+        if "yaml" in content_type or "x-yaml" in content_type:
+            return yaml.safe_load(response.text)
         return response.json()
 
     async def get_task_config(self, tournament_id: str) -> dict[str, Any]:
@@ -279,7 +297,11 @@ class TournamentAPI:
         response = await self._request(
             "GET",
             f"/api/v1/tournaments/{tournament_id}/config/eval_config",
+            expect_json=False,
         )
+        content_type = response.headers.get("content-type", "")
+        if "yaml" in content_type or "x-yaml" in content_type:
+            return yaml.safe_load(response.text)
         return response.json()
 
     async def get_winner_hotkey(self, tournament_id: str) -> WinnerInfo:
