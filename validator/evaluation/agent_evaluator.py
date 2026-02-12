@@ -35,7 +35,7 @@ logger = get_logger(__name__)
 
 class EvaluationError(Exception):
     """Raised when evaluation fails."""
-    
+
     def __init__(self, message: str, recoverable: bool = True):
         self.message = message
         self.recoverable = recoverable
@@ -45,7 +45,7 @@ class EvaluationError(Exception):
 class AgentEvaluator:
     """
     Handles evaluation of a single agent.
-    
+
     Follows the evaluation flow:
     1. Clean previous state
     2. Download and prepare agent
@@ -62,22 +62,16 @@ class AgentEvaluator:
         api: TournamentAPI,
         validator_hotkey: str,
     ):
-        """
-        Initialize agent evaluator.
-        
-        Args:
-            config: Validator configuration
-            api: Tournament API client
-            validator_hotkey: Validator's hotkey for API calls
-        """
         self.config = config
         self.api = api
         self.validator_hotkey = validator_hotkey
-        
+
         # Paths
         self.workspace = config.paths.workspace
         self.registry_path = self.workspace / "agent_registry"
         self.result_path = self.workspace / "evaluation_result.json"
+
+    # ── Public API ───────────────────────────────────────────────────────
 
     async def evaluate(
         self,
@@ -85,51 +79,39 @@ class AgentEvaluator:
         agent: Agent,
     ) -> None:
         """
-        Run complete evaluation for an agent.
-        
-        Args:
-            tournament_id: Tournament ID
-            agent: Agent to evaluate
-            
+        Run the complete evaluation pipeline for an agent.
+
         Raises:
-            EvaluationError: If evaluation fails
+            EvaluationError: If any step fails.
         """
         task_module = self._get_task_module()
-        
+
         try:
-            # Step 1: Clean previous state
             logger.info(f"Evaluating agent: {agent.id}")
             await self._clean_previous_state(task_module)
-            
-            # Step 2: Download and prepare agent
             await self._prepare_agent(agent)
-            
-            # Step 3: Mark in-progress
+
             await self.api.set_evaluation_in_progress(
                 tournament_id=tournament_id,
                 agent_id=agent.id,
                 validator_hotkey=self.validator_hotkey,
             )
-            
-            # Step 4: Install agent module
+
             await self._install_agent_module(task_module)
-            
-            # Step 5: Run evaluation
             result = await self._run_evaluation()
-            
-            # Step 6: Submit results
             await self._submit_results(tournament_id, agent.id, result)
-            
-            logger.info(f"✅ Evaluation complete for agent: {agent.id}")
-            
+
+            logger.info(f"Evaluation complete for agent: {agent.id}")
+
         except EvaluationError:
             raise
         except Exception as e:
             logger.error(f"Evaluation failed: {e}")
             raise EvaluationError(str(e), recoverable=True)
         finally:
-            # Step 7: Cleanup
             await self._cleanup(tournament_id, task_module)
+
+    # ── Shared helpers ───────────────────────────────────────────────────
 
     def _get_task_module(self) -> str:
         """Get task module name from config."""
@@ -137,117 +119,121 @@ class AgentEvaluator:
             raise EvaluationError("Task configuration not loaded", recoverable=False)
         return self.config.task_config.task_module
 
-    async def _clean_previous_state(self, task_module: str) -> None:
-        """Clean up from any previous evaluation."""
-        logger.debug("Cleaning previous evaluation state...")
-        
-        # Uninstall existing module if installed
+    @property
+    def _result_file_locations(self) -> list[Path]:
+        """All possible locations where evaluation_result.json may appear."""
+        return [
+            self.result_path,
+            self.config.paths.eval_repo / "evaluation_result.json",
+        ]
+
+    async def _uninstall_module(self, task_module: str) -> None:
+        """Uninstall the task module if currently installed."""
         if is_module_installed(task_module):
-            logger.debug(f"Uninstalling existing module: {task_module}")
+            logger.debug(f"Uninstalling module: {task_module}")
             await run_command_async(
                 [sys.executable, "-m", "pip", "uninstall", "-y", task_module],
                 timeout=60,
             )
-        
-        # Clean workspace
+
+    def _remove_files(self, *paths: Path) -> None:
+        """Remove each file that exists."""
+        for path in paths:
+            path.unlink(missing_ok=True)
+
+    # ── Pipeline steps ───────────────────────────────────────────────────
+
+    async def _clean_previous_state(self, task_module: str) -> None:
+        """Remove artifacts from any previous evaluation."""
+        logger.debug("Cleaning previous evaluation state")
+        await self._uninstall_module(task_module)
         clean_directory(self.registry_path)
-        for rp in [
-            self.result_path,
-            self.config.paths.eval_repo / "evaluation_result.json",
-        ]:
-            if rp.exists():
-                rp.unlink()
+        self._remove_files(*self._result_file_locations)
 
     async def _prepare_agent(self, agent: Agent) -> None:
-        """Download and extract agent."""
+        """Download and extract agent archive."""
         logger.info(f"Downloading agent: {agent.id}")
-        
-        # Download agent ZIP
+
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
             tmp_path = Path(tmp.name)
-        
+
         try:
             await self.api.download_agent(agent.id, tmp_path)
-            
-            # Extract to registry
             self.registry_path.mkdir(parents=True, exist_ok=True)
             unzip_file(tmp_path, self.registry_path)
-            
             logger.info(f"Agent extracted to: {self.registry_path}")
         finally:
-            if tmp_path.exists():
-                tmp_path.unlink()
+            tmp_path.unlink(missing_ok=True)
 
     async def _install_agent_module(self, task_module: str) -> None:
-        """Install the agent's task module."""
+        """Install the agent's task module via pip."""
         logger.info(f"Installing agent module: {task_module}")
-        
-        # Find the source directory
+
+        source_path = self._find_module_source(task_module)
+
+        return_code, _, stderr = await run_command_async(
+            [sys.executable, "-m", "pip", "install", "-e", str(source_path)],
+            timeout=300,
+        )
+        if return_code != 0:
+            raise EvaluationError(f"Module installation failed: {stderr}")
+
+        await self._verify_installation()
+
+    def _find_module_source(self, task_module: str) -> Path:
+        """Locate the module source directory inside the registry."""
         source_path = self.registry_path / "source" / task_module
+
         if not source_path.exists():
-            # Try to find any module in source
+            # Fall back to the first directory under source/
             source_dir = self.registry_path / "source"
             if source_dir.exists():
-                modules = [d for d in source_dir.iterdir() if d.is_dir()]
-                if modules:
-                    source_path = modules[0]
-                    logger.warning(f"Using module at: {source_path}")
-        
+                candidates = [d for d in source_dir.iterdir() if d.is_dir()]
+                if candidates:
+                    source_path = candidates[0]
+                    logger.warning(f"Expected module not found; using: {source_path}")
+
         if not source_path.exists():
             raise EvaluationError(
                 f"Task module not found: source/{task_module}",
                 recoverable=False,
             )
-        
-        # Install module
-        return_code, stdout, stderr = await run_command_async(
-            [sys.executable, "-m", "pip", "install", "-e", str(source_path)],
-            timeout=300,
-        )
-        
-        if return_code != 0:
-            raise EvaluationError(f"Module installation failed: {stderr}")
-        
-        # Verify installation
-        logger.debug("Verifying module installation...")
+        return source_path
+
+    async def _verify_installation(self) -> None:
+        """Run list_envs.py if present to verify the module installed correctly."""
         list_envs_script = self.registry_path / "scripts" / "list_envs.py"
-        if list_envs_script.exists():
-            return_code, stdout, stderr = await run_command_async(
-                [sys.executable, str(list_envs_script)],
-                timeout=60,
-            )
-            if return_code != 0:
-                logger.warning(f"list_envs.py failed: {stderr}")
-            else:
-                logger.debug(f"Registered environments: {stdout[:200]}...")
+        if not list_envs_script.exists():
+            return
+
+        return_code, stdout, stderr = await run_command_async(
+            [sys.executable, str(list_envs_script)],
+            timeout=60,
+        )
+        if return_code != 0:
+            logger.warning(f"list_envs.py failed: {stderr}")
+        else:
+            logger.debug(f"Registered environments: {stdout[:200]}")
 
     def _resolve_policy_path(self) -> Optional[str]:
-        """Resolve the path to the agent's best policy checkpoint.
-        
-        The agent archive is expected to contain:
-            agent_registry/best_policy/best_policy.pt
-        
-        Returns:
-            Absolute path to the policy checkpoint, or None if not found.
+        """
+        Resolve the path to the agent's best policy checkpoint.
+
+        Expected location: agent_registry/best_policy/best_policy.pt
         """
         policy_file = self.registry_path / "best_policy" / "best_policy.pt"
         if policy_file.exists():
             return str(policy_file.resolve())
-        
-        logger.warning(
-            f"Policy checkpoint not found at expected path: {policy_file}"
-        )
+
+        logger.warning(f"Policy checkpoint not found: {policy_file}")
         return None
 
     def _build_eval_config(self) -> Path:
-        """Build an evaluation config YAML that includes the agent's policy_path.
-        
-        Reads the base task_config.yaml (downloaded from the API during setup)
-        and injects the resolved policy_path so that evaluate.py loads the
-        agent's trained policy instead of using random actions.
-        
-        Returns:
-            Path to the evaluation config YAML file (written to workspace).
+        """
+        Build an evaluation config YAML with the agent's policy_path injected.
+
+        Reads the base task_config.yaml and adds the resolved policy_path so
+        evaluate.py loads the agent's trained policy.
         """
         task_config_path = self.workspace / "task_config.yaml"
         if not task_config_path.exists():
@@ -255,56 +241,43 @@ class AgentEvaluator:
                 f"Task config not found: {task_config_path}",
                 recoverable=False,
             )
-        
+
         with open(task_config_path, "r") as f:
             config_data = yaml.safe_load(f)
-        
-        # Inject the resolved policy path
+
         policy_path = self._resolve_policy_path()
         config_data["policy_path"] = policy_path
         logger.info(f"Resolved policy_path: {policy_path}")
-        
-        # Write the evaluation-specific config
+
         eval_config_path = self.workspace / "eval_config.yaml"
         with open(eval_config_path, "w") as f:
             yaml.dump(config_data, f, default_flow_style=False)
-        
+
         return eval_config_path
 
     async def _run_evaluation(self) -> dict[str, Any]:
-        """Run the actual evaluation."""
-        logger.info("Running evaluation...")
-        
-        # Find evaluate.py script
+        """Execute the evaluation script and return the result dict."""
+        logger.info("Running evaluation")
+
         eval_script = self.config.paths.eval_repo / "scripts" / "evaluate.py"
         if not eval_script.exists():
             raise EvaluationError(
                 f"Evaluation script not found: {eval_script}",
                 recoverable=False,
             )
-        
-        # Build eval config with the agent's policy_path injected
+
         eval_config_path = self._build_eval_config()
-        
-        # Run evaluation (cwd = eval_repo)
-        #
-        # We launch evaluate.py through a tiny bootstrap that forces
-        # multiprocessing.set_start_method('spawn').  The default on Linux
-        # is 'fork', which copies the parent's CUDA driver state into
-        # child workers.  Because evaluate.py (or its imports) may touch
-        # CUDA before spawning workers, the forked children inherit a
-        # broken driver handle and fail with:
-        #   RuntimeError: CUDA driver initialization failed
-        # Using 'spawn' gives every worker a fresh process and clean CUDA
-        # initialisation.
         eval_cwd = self.config.paths.eval_repo
         timeout = self.config.retry.evaluation_timeout_seconds
+
+        # Bootstrap forces spawn multiprocessing and forwards argv to evaluate.py
         bootstrap = (
             "import multiprocessing, sys;"
             " multiprocessing.set_start_method('spawn', force=True);"
             " sys.argv = sys.argv[1:];"
             " import runpy; runpy.run_path(sys.argv[0], run_name='__main__')"
         )
+
         return_code, stdout, stderr = await run_command_async(
             [
                 sys.executable, "-c", bootstrap,
@@ -315,37 +288,37 @@ class AgentEvaluator:
             cwd=eval_cwd,
             timeout=timeout,
         )
-        
-        # Always log output for debugging
+
         if stdout:
             logger.info(f"Evaluation stdout (last 2000 chars):\n{stdout[-2000:]}")
         if stderr:
             logger.warning(f"Evaluation stderr (last 2000 chars):\n{stderr[-2000:]}")
-        
+
         if return_code != 0:
             raise EvaluationError(
                 f"Evaluation script failed (exit={return_code}): {stderr[-500:]}"
             )
-        
-        # evaluate.py writes evaluation_result.json relative to its cwd (eval_repo)
-        cwd_result_path = eval_cwd / "evaluation_result.json"
-        
-        # Check both possible locations
-        result_file = None
-        if self.result_path.exists():
-            result_file = self.result_path
-        elif cwd_result_path.exists():
-            result_file = cwd_result_path
-            # Move it to the expected workspace location for consistency
-            shutil.move(str(cwd_result_path), str(self.result_path))
-            result_file = self.result_path
-        
-        if result_file is None:
+
+        return self._collect_result(eval_cwd)
+
+    def _collect_result(self, eval_cwd: Path) -> dict[str, Any]:
+        """
+        Locate and read evaluation_result.json.
+
+        The file may appear in the workspace or eval_repo cwd.  If found in the
+        cwd fallback location it is moved to the canonical workspace path.
+        """
+        cwd_result = eval_cwd / "evaluation_result.json"
+
+        if not self.result_path.exists() and cwd_result.exists():
+            shutil.move(str(cwd_result), str(self.result_path))
+
+        if not self.result_path.exists():
             raise EvaluationError("evaluation_result.json not generated")
-        
-        with open(result_file, "r") as f:
+
+        with open(self.result_path, "r") as f:
             result = json.load(f)
-        
+
         logger.info(f"Evaluation score: {result.get('score', 'N/A')}")
         return result
 
@@ -355,21 +328,11 @@ class AgentEvaluator:
         agent_id: str,
         result: dict[str, Any],
     ) -> None:
-        """Submit evaluation results to API."""
-        logger.info("Submitting evaluation results...")
-        
-        # Get log directory from result
-        log_dir = result.get("log_dir")
-        log_file: Optional[Path] = None
-        
-        if log_dir:
-            log_path = Path(log_dir)
-            if log_path.exists():
-                # Create logs ZIP
-                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-                    log_file = Path(tmp.name)
-                zip_directory(log_path, log_file)
-        
+        """Submit evaluation results (and optional logs) to the API."""
+        logger.info("Submitting evaluation results")
+
+        log_file = self._create_log_archive(result.get("log_dir"))
+
         try:
             await self.api.submit_evaluation(
                 tournament_id=tournament_id,
@@ -381,33 +344,37 @@ class AgentEvaluator:
                 log_file=log_file,
             )
         finally:
-            if log_file and log_file.exists():
-                log_file.unlink()
+            if log_file:
+                log_file.unlink(missing_ok=True)
+
+    def _create_log_archive(self, log_dir: Optional[str]) -> Optional[Path]:
+        """ZIP the log directory if it exists, returning the archive path."""
+        if not log_dir:
+            return None
+
+        log_path = Path(log_dir)
+        if not log_path.exists():
+            return None
+
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+            archive_path = Path(tmp.name)
+
+        zip_directory(log_path, archive_path)
+        return archive_path
 
     async def _cleanup(self, tournament_id: str, task_module: str) -> None:
-        """Cleanup after evaluation."""
-        logger.debug("Cleaning up after evaluation...")
-        
-        # Uninstall module
-        if is_module_installed(task_module):
-            await run_command_async(
-                [sys.executable, "-m", "pip", "uninstall", "-y", task_module],
-                timeout=60,
-            )
-        
-        # Clean result / temp config files (workspace path + eval_repo cwd fallback)
-        for rp in [
-            self.result_path,
-            self.config.paths.eval_repo / "evaluation_result.json",
+        """Remove all evaluation artifacts and clear in-progress status."""
+        logger.debug("Cleaning up after evaluation")
+
+        await self._uninstall_module(task_module)
+
+        self._remove_files(
+            *self._result_file_locations,
             self.workspace / "eval_config.yaml",
-        ]:
-            if rp.exists():
-                rp.unlink()
-        
-        # Clean registry
+        )
+
         clean_directory(self.registry_path)
-        
-        # Clear in-progress status
+
         try:
             await self.api.clear_evaluation_in_progress(
                 tournament_id=tournament_id,
@@ -415,4 +382,3 @@ class AgentEvaluator:
             )
         except Exception as e:
             logger.warning(f"Failed to clear in-progress status: {e}")
-
