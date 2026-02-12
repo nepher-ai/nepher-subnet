@@ -101,14 +101,25 @@ class ValidatorOrchestrator:
 
     async def _main_loop(self) -> None:
         """Main validator loop."""
+        logger.info(
+            "Entering main loop",
+            api_url=self.config.api_url,
+            poll_interval=f"{self.NO_TOURNAMENT_INTERVAL}s",
+        )
+
+        iteration = 0
         while True:
+            iteration += 1
             try:
                 # 1. Check for active tournament
+                logger.info(f"[iter {iteration}] Checking for active tournament...")
                 tournament = await self.api.get_active_tournament()
                 self._current_tournament = tournament
                 
                 if tournament is None:
-                    logger.info("No active tournament. Waiting...")
+                    logger.info(
+                        f"No active tournament. Sleeping {self.NO_TOURNAMENT_INTERVAL}s before next check..."
+                    )
                     await asyncio.sleep(self.NO_TOURNAMENT_INTERVAL)
                     continue
                 
@@ -120,12 +131,19 @@ class ValidatorOrchestrator:
                 # 2. Determine current period
                 current_time = int(time.time())
                 period = get_current_period(tournament, current_time)
+                logger.info(
+                    f"[iter {iteration}] Tournament {tournament.id} — "
+                    f"period={period.name}, status={tournament.status}"
+                )
                 
                 # 3. Handle state transitions
                 await self._handle_period(tournament, period)
                 
             except Exception as e:
-                logger.error(f"Main loop error: {e}", exc_info=True)
+                logger.error(
+                    f"[iter {iteration}] Main loop error: {e}",
+                    exc_info=True,
+                )
                 await asyncio.sleep(self.ERROR_INTERVAL)
 
     async def _handle_period(

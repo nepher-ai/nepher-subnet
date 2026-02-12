@@ -211,10 +211,21 @@ class TournamentAPI:
         Endpoint: GET /api/v1/tournaments/active
         """
         try:
+            logger.info(f"Fetching active tournament from {self.base_url}/api/v1/tournaments/active")
             response = await self._request("GET", "/api/v1/tournaments/active")
             data = response.json()
-            return Tournament(**data) if data else None
+            if data:
+                tournament = Tournament(**data)
+                logger.info(
+                    f"Active tournament found: {tournament.id} "
+                    f"(status={tournament.status}, name={tournament.name})"
+                )
+                return tournament
+            else:
+                logger.info("API returned empty response — no active tournament")
+                return None
         except NotFoundError:
+            logger.info("No active tournament (404)")
             return None
         except APIError as e:
             logger.error(f"Failed to fetch active tournament: {e}")
