@@ -4,7 +4,7 @@
 set -e
 
 # Environment setup
-export ISAACLAB_PATH=${ISAACLAB_PATH:-/workspace/IsaacLab}
+export ISAACLAB_PATH=${ISAACLAB_PATH:-/isaac-lab}
 export ISAACSIM_PATH=${ISAACSIM_PATH:-/isaac-sim}
 
 echo "=============================================="

@@ -1,8 +1,7 @@
 # Nepher Validator Dockerfile
-# Based on NVIDIA Isaac Lab pre-built container (includes Isaac Sim + Isaac Lab)
-# Reference: https://isaac-sim.github.io/IsaacLab/release/2.3.0/source/deployment/docker.html
+# Based on NVIDIA Isaac Sim for evaluation capability
 
-FROM nvcr.io/nvidia/isaac-lab:2.3.1
+FROM nvcr.io/nvidia/isaac-sim:5.1.0
 
 # Set environment
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -10,20 +9,43 @@ ENV PYTHONUNBUFFERED=1
 ENV ACCEPT_EULA=Y
 ENV PRIVACY_CONSENT=Y
 ENV ISAACSIM_PATH=/isaac-sim
-ENV ISAACLAB_PATH=/workspace/IsaacLab
+ENV ISAACLAB_PATH=/isaac-lab
 # Fix: Isaac Sim sets TERM=ansi+tabs which is unrecognized by many tools
 ENV TERM=xterm
 
 # Switch to root for system package installation
+# (Isaac Sim base image runs as non-root by default)
 USER root
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies (python3 + symlink needed by isaaclab.sh)
+RUN mkdir -p /var/lib/apt/lists/partial \
+    && apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
+    python3 \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
+
+# Clone Isaac Lab and create symlink so isaaclab.sh finds Isaac Sim's Python
+RUN git clone --depth 1 https://github.com/isaac-sim/IsaacLab.git ${ISAACLAB_PATH} \
+    && ln -s ${ISAACSIM_PATH} ${ISAACLAB_PATH}/_isaac_sim \
+    && cd ${ISAACLAB_PATH} \
+    && ./isaaclab.sh --install
+
+# Use Isaac Lab's Python environment
+ENV PYTHON_CMD="${ISAACLAB_PATH}/isaaclab.sh -p"
+
+# Fix broken pip bundled with Isaac Sim (corrupted pip._vendor.packaging)
+RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m ensurepip --upgrade \
+    && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --upgrade pip
+
+# Fix: Isaac Sim 5.1.0 bundles a broken torch in omni.isaac.ml_archive with
+# missing _vendor/packaging/_structures.py. Isaac Lab's --install already
+# installs a correct torch via pip. Remove the broken pre-bundled copy so
+# Python finds the properly installed torch instead.
+RUN rm -rf ${ISAACSIM_PATH}/exts/omni.isaac.ml_archive/pip_prebundle/torch
 
 # Copy requirements and install
 COPY requirements.txt .

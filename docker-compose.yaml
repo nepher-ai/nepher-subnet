@@ -76,7 +76,7 @@ services:
         max-size: "100m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "bash", "-c", "/workspace/IsaacLab/isaaclab.sh -p -c 'import nepher_core; print(\"OK\")'"]
+      test: ["CMD", "bash", "-c", "/isaac-lab/isaaclab.sh -p -c 'import nepher_core; print(\"OK\")'"]
       interval: 60s
       timeout: 30s
       retries: 3
