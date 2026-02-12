@@ -237,6 +237,7 @@ class AgentEvaluator:
                 sys.executable, str(eval_script),
                 "--config", str(task_config_path),
                 "--headless",
+                "--result-path", str(self.result_path),
             ],
             cwd=self.config.paths.eval_repo,
             timeout=timeout,
