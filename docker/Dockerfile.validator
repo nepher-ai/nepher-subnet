@@ -13,7 +13,10 @@ ENV ISAACLAB_PATH=/isaac-lab
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Note: The Isaac Sim base image may be missing /var/lib/apt/lists/partial,
+# so we recreate it before running apt-get update.
+RUN mkdir -p /var/lib/apt/lists/partial \
+    && apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     && rm -rf /var/lib/apt/lists/*
