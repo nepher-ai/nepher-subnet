@@ -47,6 +47,7 @@ services:
     environment:
       - NEPHER_API_KEY=${NEPHER_API_KEY}
       - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament-api.nepher.ai}
+      - ENVHUB_API_URL=${ENVHUB_API_URL:-https://envhub-api.nepher.ai}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
     deploy:
