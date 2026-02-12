@@ -120,7 +120,7 @@ async def run_submit(args: argparse.Namespace) -> int:
         return cli_val or config_val or (os.environ.get(env_key) if env_key else None) or default
     
     api_key = resolve(args.api_key, config.api_key if config else None, "NEPHER_API_KEY")
-    api_url = resolve(args.api_url, config.api_url if config else None, default="https://tournament.nepher.ai")
+    api_url = resolve(args.api_url, config.api_url if config else None, default="https://tournament-api.nepher.ai")
     wallet_name = resolve(args.wallet_name, config.wallet.name if config else None, default="miner")
     wallet_hotkey = resolve(args.wallet_hotkey, config.wallet.hotkey if config else None, default="default")
     

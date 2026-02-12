@@ -19,7 +19,7 @@ services:
       - ${AGENT_PATH:-.}/agent:/app/agent:ro
     environment:
       - NEPHER_API_KEY=${NEPHER_API_KEY}
-      - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament.nepher.ai}
+      - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament-api.nepher.ai}
     networks:
       - nepher-net
     profiles:
@@ -46,7 +46,7 @@ services:
       - ./logs:/app/logs
     environment:
       - NEPHER_API_KEY=${NEPHER_API_KEY}
-      - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament.nepher.ai}
+      - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament-api.nepher.ai}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
     deploy:

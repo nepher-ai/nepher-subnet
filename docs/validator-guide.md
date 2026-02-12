@@ -190,7 +190,7 @@ Your wallet files will be stored at `~/.bittensor/wallets/validator/`.
 
 ## 5. Get Your Nepher API Key
 
-1. Go to the **Nepher Tournament Platform**: https://tournament.nepher.ai
+1. Go to the **Nepher Tournament Platform**: https://tournament-api.nepher.ai
 2. Sign in / register as a validator
 3. Navigate to your **dashboard** or **API settings**
 4. Generate or copy your **API key**
@@ -228,7 +228,7 @@ Set the following in your `.env` file:
 NEPHER_API_KEY=nepher_your_actual_api_key_here
 
 # OPTIONAL — Custom API URL (default is fine for production)
-# NEPHER_API_URL=https://tournament.nepher.ai
+# NEPHER_API_URL=https://tournament-api.nepher.ai
 
 # OPTIONAL — Custom wallet path (default: ~/.bittensor)
 # BITTENSOR_WALLET_PATH=~/.bittensor
@@ -477,7 +477,7 @@ subnet:
 
 # Tournament API
 tournament:
-  api_url: "https://tournament.nepher.ai"
+  api_url: "https://tournament-api.nepher.ai"
   api_key: "${NEPHER_API_KEY}"  # Resolved from environment
 
 # Wallet

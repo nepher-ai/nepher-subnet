@@ -52,7 +52,7 @@ class TournamentConfig(BaseModel):
     """Tournament API configuration."""
     
     api_url: str = Field(
-        default="https://tournament.nepher.ai",
+        default="https://tournament-api.nepher.ai",
         description="Tournament API base URL",
     )
     api_key: str = Field(description="API key for authentication")

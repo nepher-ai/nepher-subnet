@@ -8,7 +8,7 @@ subnet:
 
 # Tournament API configuration
 tournament:
-  api_url: "https://tournament.nepher.ai"
+  api_url: "https://tournament-api.nepher.ai"
   api_key: "${NEPHER_API_KEY}"  # Set via environment variable
 
 # Wallet configuration

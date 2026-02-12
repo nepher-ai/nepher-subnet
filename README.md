@@ -216,6 +216,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 - **Website:** https://nepher.ai
 - **Documentation:** https://docs.nepher.ai
-- **Tournament Platform:** https://tournament.nepher.ai
+- **Tournament Platform:** https://tournament-api.nepher.ai
 - **Discord:** https://discord.gg/nepher
 
