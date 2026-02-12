@@ -179,6 +179,22 @@ class TournamentAPI:
         if response.status_code >= 400:
             self._handle_error_response(response)
         
+        # Verify the response is JSON when we expect it to be.
+        # A common misconfiguration is pointing at a frontend SPA which
+        # returns 200 + HTML for every route.
+        content_type = response.headers.get("content-type", "")
+        if response.status_code == 200 and "application/json" not in content_type:
+            body_preview = response.text[:200] if response.text else "(empty)"
+            raise APIError(
+                f"Expected JSON response from {method} {url} but got "
+                f"content-type '{content_type}'. This usually means "
+                f"NEPHER_API_URL ({self.base_url}) is pointing at the "
+                f"frontend app instead of the API backend. "
+                f"Response preview: {body_preview}",
+                status_code=response.status_code,
+                response_body=response.text,
+            )
+        
         return response
 
     # =========================================================================
@@ -199,6 +215,9 @@ class TournamentAPI:
             data = response.json()
             return Tournament(**data) if data else None
         except NotFoundError:
+            return None
+        except APIError as e:
+            logger.error(f"Failed to fetch active tournament: {e}")
             return None
 
     async def get_tournament(self, tournament_id: str) -> Tournament:
