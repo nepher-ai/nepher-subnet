@@ -42,13 +42,11 @@ RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m ensurepip --upgrade \
     && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --upgrade pip
 
 # Fix: Isaac Sim 5.1.0 bundles a broken torch in omni.isaac.ml_archive with
-# missing _vendor/packaging/_structures.py.  Remove the broken pre-bundled
-# copy and explicitly install a working torch so that both Isaac Lab extensions
-# and eval-nav can import it at runtime.
 RUN CUDA_TAG="cu$(echo ${CUDA_VERSION:-12.4.0} | cut -d. -f1,2 | tr -d '.')" \
     && echo "Detected CUDA tag: ${CUDA_TAG}" \
-    && rm -rf ${ISAACSIM_PATH}/exts/omni.isaac.ml_archive/pip_prebundle/torch \
-    && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir \
+    && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip uninstall -y torch 2>/dev/null || true \
+    && rm -rf ${ISAACSIM_PATH}/exts/omni.isaac.ml_archive/pip_prebundle/torch* \
+    && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir --force-reinstall \
        torch --index-url https://download.pytorch.org/whl/${CUDA_TAG}
 
 # Copy requirements and install
