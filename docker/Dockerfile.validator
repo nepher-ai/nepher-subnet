@@ -10,11 +10,13 @@ ENV ACCEPT_EULA=Y
 ENV ISAACSIM_PATH=/isaac-sim
 ENV ISAACLAB_PATH=/isaac-lab
 
+# Switch to root for system package installation
+# (Isaac Sim base image runs as non-root by default)
+USER root
+
 WORKDIR /app
 
 # Install system dependencies
-# Note: The Isaac Sim base image may be missing /var/lib/apt/lists/partial,
-# so we recreate it before running apt-get update.
 RUN mkdir -p /var/lib/apt/lists/partial \
     && apt-get update && apt-get install -y --no-install-recommends \
     git \
