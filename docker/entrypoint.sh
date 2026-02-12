@@ -4,7 +4,7 @@
 set -e
 
 # Environment setup
-export ISAACLAB_PATH=${ISAACLAB_PATH:-/isaac-lab}
+export ISAACLAB_PATH=${ISAACLAB_PATH:-/workspace/IsaacLab}
 export ISAACSIM_PATH=${ISAACSIM_PATH:-/isaac-sim}
 
 echo "=============================================="
@@ -16,4 +16,3 @@ echo "=============================================="
 
 # Run the validator using Isaac Lab's Python
 exec ${ISAACLAB_PATH}/isaaclab.sh -p -m validator "$@"
-

@@ -269,7 +269,7 @@ wallet:
 docker compose build validator
 ```
 
-> **Note:** This build can take **30–60 minutes** on first run as it downloads the Isaac Sim base image (~20 GB) and installs Isaac Lab.
+> **Note:** This build can take **20–40 minutes** on first run as it downloads the pre-built Isaac Lab container (~20 GB) and installs dependencies.
 
 ### 6e. Start the Validator
 
@@ -300,7 +300,7 @@ You should see output like:
 ==============================================
 Nepher Validator Container Starting
 ==============================================
-Isaac Lab: /isaac-lab
+Isaac Lab: /workspace/IsaacLab
 Isaac Sim: /isaac-sim
 ==============================================
 ...

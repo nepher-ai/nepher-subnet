@@ -44,12 +44,22 @@ services:
       - nepher-env-cache:/root/.cache/nepher
       # Logs (optional, for debugging)
       - ./logs:/app/logs
+      # Isaac Sim cache volumes (persistent across container restarts)
+      - isaac-cache-kit:/isaac-sim/kit/cache
+      - isaac-cache-ov:/root/.cache/ov
+      - isaac-cache-pip:/root/.cache/pip
+      - isaac-cache-glcache:/root/.cache/nvidia/GLCache
+      - isaac-cache-compute:/root/.nv/ComputeCache
+      - isaac-logs:/root/.nvidia-omniverse/logs
+      - isaac-data:/root/.local/share/ov/data
     environment:
       - NEPHER_API_KEY=${NEPHER_API_KEY}
       - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament-api.nepher.ai}
       - ENVHUB_API_URL=${ENVHUB_API_URL:-https://envhub-api.nepher.ai}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
+      - ACCEPT_EULA=Y
+      - PRIVACY_CONSENT=Y
     deploy:
       resources:
         reservations:
@@ -66,7 +76,7 @@ services:
         max-size: "100m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "bash", "-c", "/isaac-lab/isaaclab.sh -p -c 'import nepher_core; print(\"OK\")'"]
+      test: ["CMD", "bash", "-c", "/workspace/IsaacLab/isaaclab.sh -p -c 'import nepher_core; print(\"OK\")'"]
       interval: 60s
       timeout: 30s
       retries: 3
@@ -86,4 +96,18 @@ volumes:
   # Persistent cache for downloaded environments
   nepher-env-cache:
     driver: local
-
+  # Isaac Sim cache volumes (improves startup time on subsequent runs)
+  isaac-cache-kit:
+    driver: local
+  isaac-cache-ov:
+    driver: local
+  isaac-cache-pip:
+    driver: local
+  isaac-cache-glcache:
+    driver: local
+  isaac-cache-compute:
+    driver: local
+  isaac-logs:
+    driver: local
+  isaac-data:
+    driver: local
