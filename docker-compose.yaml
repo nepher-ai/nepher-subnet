@@ -4,8 +4,6 @@
 #   Miner:     docker-compose run miner submit --path /app/agent
 #   Validator: docker-compose up validator
 
-version: '3.8'
-
 services:
   # =========================================================================
   # Miner Service (Lightweight - Submission Only)
@@ -35,8 +33,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile.validator
     volumes:
-      # Wallet access (read-only for coldkey, hotkey needs signing)
-      - ${BITTENSOR_WALLET_PATH:-~/.bittensor}:/root/.bittensor:ro
+      # Wallet access (only wallets dir, read-only; bittensor init creates
+      # other dirs like /root/.bittensor/miners which must be writable)
+      - ${BITTENSOR_WALLET_PATH:-~/.bittensor}/wallets:/root/.bittensor/wallets:ro
       # Configuration (read-only)
       - ./config:/app/config:ro
       # Workspace (read-write for evaluation artifacts)
@@ -66,7 +65,7 @@ services:
         max-size: "100m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "bash", "-c", "${ISAACLAB_PATH}/isaaclab.sh -p -c 'import nepher_core; print(\"OK\")'"]
+      test: ["CMD", "bash", "-c", "/isaac-lab/isaaclab.sh -p -c 'import nepher_core; print(\"OK\")'"]
       interval: 60s
       timeout: 30s
       retries: 3

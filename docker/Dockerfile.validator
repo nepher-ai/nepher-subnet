@@ -59,8 +59,10 @@ RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e .
 RUN git clone https://github.com/nepher-ai/eval-nav.git ./eval-nav \
     && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e ./eval-nav
 
-# Create directories for volumes
-RUN mkdir -p /app/config /app/workspace /root/.cache/nepher
+# Create directories for volumes and bittensor runtime dirs
+# (bittensor init creates /root/.bittensor/miners etc. on import)
+RUN mkdir -p /app/config /app/workspace /root/.cache/nepher \
+    /root/.bittensor/miners /root/.bittensor/wallets
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
