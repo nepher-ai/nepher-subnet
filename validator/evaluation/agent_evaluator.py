@@ -234,7 +234,7 @@ class AgentEvaluator:
         timeout = self.config.retry.evaluation_timeout_seconds
         return_code, stdout, stderr = await run_command_async(
             [
-                "python", str(eval_script),
+                sys.executable, str(eval_script),
                 "--config", str(task_config_path),
                 "--headless",
             ],

@@ -126,9 +126,17 @@ class EnvScene(BaseModel):
     env_id: str
     scene: str
 
+    @field_validator("scene", mode="before")
+    @classmethod
+    def coerce_scene_to_str(cls, v: Any) -> str:
+        """Accept both int and str scene identifiers from the API."""
+        return str(v)
+
 
 class TaskConfig(BaseModel):
     """Task/evaluation configuration (downloaded from API)."""
+    
+    model_config = {"extra": "ignore"}
     
     task_name: str
     task_module: str
@@ -139,6 +147,10 @@ class TaskConfig(BaseModel):
     
     # Optional fields
     max_steps_per_episode: Optional[int] = None
+    max_episode_steps: Optional[int] = None
+    num_envs: Optional[int] = None
+    log_dir: Optional[str] = None
+    enable_logging: bool = Field(default=False)
     render: bool = Field(default=False)
 
 
