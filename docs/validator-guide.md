@@ -136,8 +136,8 @@ git clone https://github.com/nepher-ai/nepher-subnet.git && cd nepher-subnet
 ### Configure
 
 ```bash
-cp config/docker.env.example .env
-nano .env   # Optionally set WALLET_NAME, WALLET_HOTKEY, BITTENSOR_WALLET_PATH
+# Optional: only needed if you want to override default env vars
+# cp config/docker.env.example .env
 
 cp config/validator_config.example.yaml config/validator_config.yaml
 nano config/validator_config.yaml  # Set your API key and wallet name/hotkey
