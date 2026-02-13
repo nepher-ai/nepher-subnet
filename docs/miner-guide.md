@@ -134,7 +134,7 @@ Place your agent in `./agent/` or set `AGENT_PATH`. No GPU required.
 | Validation fails | Run `nepher-miner validate --path ./my-agent -v` and check the output |
 | Connection error | Verify internet / API URL / firewall |
 | Wallet not found | Check `~/.bittensor/wallets/miner/` has `coldkey` + `hotkeys/default` |
-| "No active tournament" | Submissions only accepted during contest/submit window — check Discord |
+| "No active tournament" | Submissions only accepted during contest/submit period — check Discord |
 | Rejected (not registered) | `btcli subnet register --wallet.name miner --wallet.hotkey default --netuid 49` |
 
 ---
