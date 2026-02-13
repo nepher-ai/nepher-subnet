@@ -59,6 +59,7 @@ services:
       - isaac-logs:/root/.nvidia-omniverse/logs
       - isaac-data:/root/.local/share/ov/data
     environment:
+      - NEPHER_API_KEY=${NEPHER_API_KEY}
       - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament-api.nepher.ai}
       - ENVHUB_API_URL=${ENVHUB_API_URL:-https://envhub-api.nepher.ai}
       - EVAL_REPO_URL=${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}

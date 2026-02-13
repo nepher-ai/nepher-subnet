@@ -112,6 +112,7 @@ async def download_environments(
     env_ids: List[str],
     cache_path: Optional[Path] = None,
     category: str = "navigation",
+    api_key: Optional[str] = None,
 ) -> None:
     """
     Download required environments using nepher (envhub).
@@ -120,6 +121,7 @@ async def download_environments(
         env_ids: List of environment IDs to download
         cache_path: Optional custom cache path
         category: Environment category (default: "navigation")
+        api_key: Optional API key for envhub authentication
     """
     try:
         from nepher.storage.cache import get_cache_manager
@@ -127,7 +129,7 @@ async def download_environments(
         from nepher.storage.bundle import BundleManager
         
         cache_manager = get_cache_manager(cache_dir=cache_path, category=category)
-        client = get_client(api_url="https://envhub-api.nepher.ai")
+        client = get_client(api_url="https://envhub-api.nepher.ai", api_key=api_key)
         
         for env_id in env_ids:
             logger.info(f"Checking environment: {env_id}")
@@ -292,7 +294,11 @@ class SetupManager:
         # Step 4: Download environments
         logger.info("Step 4: Downloading required environments...")
         env_ids = self._get_required_env_ids()
-        await download_environments(env_ids, self.config.paths.env_cache)
+        await download_environments(
+            env_ids,
+            self.config.paths.env_cache,
+            api_key=self.config.api_key,
+        )
         
         # Propagate the cache directory to the process environment so that
         # any subprocess (e.g. the evaluation script) using the nepher library
