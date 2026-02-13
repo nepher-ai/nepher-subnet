@@ -69,8 +69,8 @@ def get_current_period(
     if current_time < tournament.evaluation_end_time:
         return TournamentPeriod.EVALUATION
     
-    # Review stage (status-based)
-    if tournament.status == "review":
+    # Review period (between evaluation_end and reward_start)
+    if tournament.reward_start_time and current_time < tournament.reward_start_time:
         return TournamentPeriod.REVIEW
     
     # Reward period

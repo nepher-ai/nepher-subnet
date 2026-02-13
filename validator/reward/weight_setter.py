@@ -81,13 +81,15 @@ class WeightSetter:
         self._metagraph = get_metagraph(subtensor, self.config.subnet.subnet_uid)
         return self._metagraph
 
+    WEIGHT_SET_INTERVAL = 3600  # Re-set weights every 1 hour
+
     async def run_reward(
         self,
         tournament: Tournament,
         is_reward_period_fn,
     ) -> None:
         """
-        Run reward phase - set weights to winner.
+        Run reward phase - set weights to winner every hour.
         
         Args:
             tournament: Current tournament
@@ -97,23 +99,29 @@ class WeightSetter:
         logger.info("Starting reward phase")
         logger.info("=" * 60)
         
-        # Get metagraph (needed for weight setting)
-        metagraph = self._get_metagraph()
-        logger.info(f"Loaded metagraph with {len(metagraph.uids)} UIDs")
-        
-        # Query winner from API
-        winner_uid = await self._get_winner_uid(tournament.id, metagraph)
-        
-        # Set weights
-        await self._set_weights(winner_uid, metagraph)
-        
-        # Wait for reward period to end
-        logger.info("Waiting for reward period to end...")
         while is_reward_period_fn():
-            await asyncio.sleep(60)
+            # Refresh metagraph each cycle
+            metagraph = self._get_metagraph()
+            logger.info(f"Loaded metagraph with {len(metagraph.uids)} UIDs")
+            
+            # Query winner from API
+            winner_uid = await self._get_winner_uid(tournament.id, metagraph)
+            
+            # Set weights
+            await self._set_weights(winner_uid, metagraph)
+            
+            # Sleep for 1 hour (or until reward period ends)
+            logger.info(
+                f"Weights set. Next weight-setting in {self.WEIGHT_SET_INTERVAL}s..."
+            )
+            elapsed = 0
+            while elapsed < self.WEIGHT_SET_INTERVAL and is_reward_period_fn():
+                await asyncio.sleep(60)
+                elapsed += 60
         
         # After reward ends, burn on UID 0
         logger.info("Reward period ended - burning on UID 0")
+        metagraph = self._get_metagraph()
         await self._set_weights(self.BURN_UID, metagraph)
         
         logger.info("=" * 60)

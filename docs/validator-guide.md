@@ -1,26 +1,25 @@
-# Nepher Validator Guide — From Scratch on a Rented GPU Machine
+# Nepher Validator Guide
 
-This guide walks you through every step needed to set up and run a **Nepher Subnet 49 validator** on a freshly rented GPU machine (e.g., RunPod, Vast.ai, Lambda, etc.).
+Set up and run a **Nepher Subnet 49 validator** on a GPU machine (RunPod, Vast.ai, Lambda, etc.).
 
 ---
 
 ## Table of Contents
 
-1. [Prerequisites & Hardware Requirements](#1-prerequisites--hardware-requirements)
+1. [Hardware & Software Requirements](#1-hardware--software-requirements)
 2. [Initial Server Setup](#2-initial-server-setup)
-3. [Install NVIDIA Drivers & Container Toolkit](#3-install-nvidia-drivers--container-toolkit)
-4. [Create a Bittensor Wallet](#4-create-a-bittensor-wallet)
-5. [Get Your Nepher API Key](#5-get-your-nepher-api-key)
-6. [Option A — Run with Docker (Recommended)](#6-option-a--run-with-docker-recommended)
-7. [Option B — Run Natively (Without Docker)](#7-option-b--run-natively-without-docker)
-8. [Configuration Reference](#8-configuration-reference)
-9. [Health Check](#9-health-check)
-10. [Monitoring & Logs](#10-monitoring--logs)
-11. [Troubleshooting](#11-troubleshooting)
+3. [Bittensor Wallet](#3-bittensor-wallet)
+4. [Get Your Nepher API Key](#4-get-your-nepher-api-key)
+5. [Option A — Docker (Recommended)](#5-option-a--docker-recommended)
+6. [Option B — Native Install](#6-option-b--native-install)
+7. [Configuration Reference](#7-configuration-reference)
+8. [Health Check](#8-health-check)
+9. [Monitoring & Logs](#9-monitoring--logs)
+10. [Troubleshooting](#10-troubleshooting)
 
 ---
 
-## 1. Prerequisites & Hardware Requirements
+## 1. Hardware & Software Requirements
 
 | Requirement | Minimum | Recommended |
 |---|---|---|
@@ -32,82 +31,45 @@ This guide walks you through every step needed to set up and run a **Nepher Subn
 | **NVIDIA Driver** | 535+ | Latest stable |
 | **CUDA** | 12.1+ | 12.1+ |
 
-> **Tip:** Most GPU cloud providers (RunPod, Vast.ai, Lambda) come with NVIDIA drivers and Docker pre-installed. If yours does, you can skip directly to [Step 4](#4-create-a-bittensor-wallet).
+**Software:** Isaac Sim 5.1, Isaac Lab 2.3.0, Python 3.10+, Docker + Docker Compose, Git
 
-### Software Requirements
-
-- **Isaac Sim 5.1** — NVIDIA's robotics simulator
-- **Isaac Lab 2.3.0** — NVIDIA's robot learning framework (built on Isaac Sim)
-- **Python 3.10+**
-- **Docker + Docker Compose** (for Docker-based setup)
-- **Git**
+> **Tip:** Most GPU cloud providers ship NVIDIA drivers and Docker pre-installed. If so, skip to [Step 3](#3-bittensor-wallet).
 
 ---
 
 ## 2. Initial Server Setup
 
-SSH into your rented machine and run basic setup:
-
 ```bash
-# Update system packages
 sudo apt update && sudo apt upgrade -y
-
-# Install essential tools
 sudo apt install -y git curl wget build-essential software-properties-common
-
-# Verify GPU is detected
-nvidia-smi
+nvidia-smi  # Verify GPU — if this fails, install drivers below
 ```
 
-You should see your GPU listed with driver version and CUDA version. If `nvidia-smi` fails, you need to install NVIDIA drivers (see next step).
-
----
-
-## 3. Install NVIDIA Drivers & Container Toolkit
-
-> **Skip this step** if your cloud provider already has NVIDIA drivers and Docker installed (most do). Run `nvidia-smi` and `docker --version` to check.
-
-### 3a. Install NVIDIA Drivers (if not pre-installed)
+### Install NVIDIA Drivers (if needed)
 
 ```bash
 sudo apt install -y nvidia-driver-535
 sudo reboot
-# After reboot, verify:
-nvidia-smi
+nvidia-smi  # Verify after reboot
 ```
 
-### 3b. Install Docker (if not pre-installed)
+### Install Docker (if needed)
 
 ```bash
-# Install Docker
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
-
-# Add your user to docker group (avoids needing sudo)
-sudo usermod -aG docker $USER
-newgrp docker
-
-# Verify
-docker --version
+curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh
+sudo usermod -aG docker $USER && newgrp docker
 ```
 
-### 3c. Install NVIDIA Container Toolkit
-
-This allows Docker containers to access your GPU:
+### Install NVIDIA Container Toolkit (if needed)
 
 ```bash
-# Add NVIDIA container toolkit repository
 distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
     sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-# Install
-sudo apt update
-sudo apt install -y nvidia-container-toolkit
-
-# Configure Docker runtime
+sudo apt update && sudo apt install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 
@@ -115,326 +77,143 @@ sudo systemctl restart docker
 docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
 ```
 
-### 3d. Install Docker Compose (if not pre-installed)
+### Install Docker Compose (if needed)
 
 ```bash
-# Install Docker Compose plugin
 sudo apt install -y docker-compose-plugin
-
-# Verify
-docker compose version
 ```
 
 ---
 
-## 4. Create a Bittensor Wallet
+## 3. Bittensor Wallet
 
-You need a Bittensor wallet with a **coldkey** and a **hotkey** to run a validator.
-
-### 4a. Install Bittensor CLI
+### Create a New Wallet
 
 ```bash
 pip install bittensor
-```
 
-### 4b. Create a New Wallet
-
-```bash
-# Create a new coldkey (this is your main wallet — SAVE THE MNEMONIC SECURELY)
 btcli wallet new_coldkey --wallet.name validator
-
-# Create a hotkey for the validator
 btcli wallet new_hotkey --wallet.name validator --wallet.hotkey default
 ```
 
-> **⚠️ IMPORTANT:** Back up your coldkey mnemonic phrase securely. If you lose it, you lose access to your wallet and staked TAO forever.
+> **⚠️ Back up your coldkey mnemonic securely.** Lost mnemonic = lost wallet + staked TAO.
 
-### 4c. Fund Your Wallet
-
-Your validator wallet needs TAO for:
-- **Registration** on Subnet 49
-- **Staking** (validators need stake to have weight-setting permission)
-
-Transfer TAO to your coldkey address:
+### Fund, Register & Stake
 
 ```bash
-# Check your coldkey address
-btcli wallet overview --wallet.name validator
-```
-
-### 4d. Register on Subnet 49
-
-```bash
+btcli wallet overview --wallet.name validator                          # Get your coldkey address
 btcli subnet register --wallet.name validator --wallet.hotkey default --netuid 49
-```
-
-### 4e. Stake TAO
-
-```bash
 btcli stake add --wallet.name validator --wallet.hotkey default --amount <AMOUNT>
 ```
 
-### 4f. If Restoring an Existing Wallet
-
-If you already have a wallet and are setting up on a new machine:
+### Restore an Existing Wallet (optional)
 
 ```bash
-# Restore from mnemonic
 btcli wallet regen_coldkey --wallet.name validator
 btcli wallet regen_hotkey --wallet.name validator --wallet.hotkey default
 ```
 
-Your wallet files will be stored at `~/.bittensor/wallets/validator/`.
+Wallet files are stored at `~/.bittensor/wallets/validator/`.
 
 ---
 
-## 5. Get Your Nepher API Key
+## 4. Get Your Nepher API Key
 
-1. Go to the **Nepher Tournament Platform**: https://tournament-api.nepher.ai
-2. Sign in / register as a validator
-3. Navigate to your **dashboard** or **API settings**
-4. Generate or copy your **API key**
+1. Go to **https://tournament-api.nepher.ai** — sign in / register
+2. Navigate to **Dashboard → API Settings**
+3. Copy your **API key**
 
-You can also join the **Discord** for support: https://discord.gg/nepher
+Discord support: https://discord.gg/nepher
 
 ---
 
-## 6. Option A — Run with Docker (Recommended)
-
-Docker is the easiest way to run the validator. It bundles Isaac Sim, Isaac Lab, and all dependencies.
-
-### 6a. Clone the Repository
+## 5. Option A — Docker (Recommended)
 
 ```bash
-cd ~
-git clone https://github.com/nepher-ai/nepher-subnet.git
-cd nepher-subnet
+git clone https://github.com/nepher-ai/nepher-subnet.git && cd nepher-subnet
 ```
 
-### 6b. Set Up Environment Variables
+### Configure
 
 ```bash
-# Copy the example env file
 cp config/docker.env.example .env
+nano .env   # Set NEPHER_API_KEY (required); optionally WALLET_NAME, WALLET_HOTKEY
 
-# Edit with your values
-nano .env
-```
-
-Set the following in your `.env` file:
-
-```bash
-# REQUIRED — Your Nepher API key
-NEPHER_API_KEY=nepher_your_actual_api_key_here
-
-# OPTIONAL — Custom API URL (default is fine for production)
-# NEPHER_API_URL=https://tournament-api.nepher.ai
-
-# OPTIONAL — Custom wallet path (default: ~/.bittensor)
-# BITTENSOR_WALLET_PATH=~/.bittensor
-
-# OPTIONAL — Wallet configuration (default: validator / default)
-# WALLET_NAME=validator
-# WALLET_HOTKEY=default
-```
-
-### 6c. Set Up Validator Config
-
-```bash
-# Copy the example config
 cp config/validator_config.example.yaml config/validator_config.yaml
-
-# Edit if you need to change defaults
-nano config/validator_config.yaml
+nano config/validator_config.yaml  # Verify network, subnet_uid, wallet settings
 ```
 
-The key settings to verify:
-
-```yaml
-subnet:
-  network: "finney"          # Use "finney" for mainnet, "test" for testnet
-  subnet_uid: 49
-
-tournament:
-  api_key: "${NEPHER_API_KEY}"  # Reads from environment variable
-
-wallet:
-  name: "validator"             # Must match your wallet name from Step 4
-  hotkey: "default"             # Must match your hotkey name from Step 4
-```
-
-### 6d. Build the Docker Image
+Key `.env` values:
 
 ```bash
-docker compose build validator
+NEPHER_API_KEY=nepher_your_actual_api_key_here
+# NEPHER_API_URL=https://tournament-api.nepher.ai   # default
+# WALLET_NAME=validator                              # default
+# WALLET_HOTKEY=default                              # default
 ```
 
-> **Note:** This build can take **30–60 minutes** on first run as it downloads the Isaac Sim base image (~20 GB) and installs Isaac Lab.
-
-### 6e. Start the Validator
+### Build & Run
 
 ```bash
-# Run in the foreground (to see logs directly)
-docker compose up validator
-
-# OR run in the background (detached)
-docker compose up -d validator
+docker compose build validator          # First build takes 30–60 min (Isaac Sim ~20 GB)
+docker compose up -d validator          # Start detached
+docker compose logs -f validator        # Tail logs
 ```
 
-### 6f. Verify It's Running
+### Manage
 
 ```bash
-# Check container status
-docker compose ps
-
-# View logs
-docker compose logs -f validator
-
-# Check health
-docker compose exec validator bash -c '${ISAACLAB_PATH}/isaaclab.sh -p -c "import nepher_core; print(\"OK\")"'
-```
-
-You should see output like:
-
-```
-==============================================
-Nepher Validator Container Starting
-==============================================
-Isaac Lab: /isaac-lab
-Isaac Sim: /isaac-sim
-==============================================
-...
-Nepher Validator Starting
-Validator Hotkey: 5Gx...
-Network: finney
-Subnet UID: 49
-============================================================
-Entering main loop    api_url=https://tournament-api.nepher.ai  poll_interval=300s
-[iter 1] Checking for active tournament...
-Fetching active tournament from https://tournament-api.nepher.ai/api/v1/tournaments/active
-No active tournament (404)
-No active tournament. Sleeping 300s before next check...
-```
-
-### 6g. Managing the Docker Validator
-
-```bash
-# Stop the validator
-docker compose down
-
-# Restart the validator
-docker compose restart validator
-
-# Rebuild and restart (required after code updates)
-docker compose up -d --build validator
-
-# View real-time logs
-docker compose logs -f validator
-
-# Shell into the container for debugging
-docker compose exec validator bash
+docker compose down                     # Stop
+docker compose restart validator        # Restart
+docker compose up -d --build validator  # Rebuild after code updates
+docker compose logs -f validator        # Tail logs
+docker compose exec validator bash      # Shell into container
 ```
 
 ---
 
-## 7. Option B — Run Natively (Without Docker)
+## 6. Option B — Native Install
 
-If you prefer to install everything directly on the machine (not recommended for most users).
+### Install Isaac Sim 5.1 & Isaac Lab 2.3.0
 
-### 7a. Install Isaac Sim 5.1
-
-Follow the [NVIDIA Isaac Sim installation guide](https://docs.omniverse.nvidia.com/isaacsim/latest/installation/install_workstation.html).
-
-After installation:
+Follow the [NVIDIA Isaac Sim install guide](https://docs.omniverse.nvidia.com/isaacsim/latest/installation/install_workstation.html), then:
 
 ```bash
-# Set environment variables (add these to your ~/.bashrc)
 export ISAACSIM_PATH=/path/to/isaac-sim
 export ISAACLAB_PATH=/path/to/isaac-lab
 
-# Verify
-echo $ISAACSIM_PATH
-echo $ISAACLAB_PATH
-```
-
-### 7b. Install Isaac Lab 2.3.0
-
-```bash
 git clone https://github.com/isaac-sim/IsaacLab.git $ISAACLAB_PATH
-cd $ISAACLAB_PATH
-git checkout v2.3.0
-./isaaclab.sh --install
+cd $ISAACLAB_PATH && git checkout v2.3.0 && ./isaaclab.sh --install
 ```
 
-### 7c. Clone Nepher Subnet
+### Install Nepher Subnet
 
 ```bash
-cd ~
-git clone https://github.com/nepher-ai/nepher-subnet.git
-cd nepher-subnet
-```
+cd ~ && git clone https://github.com/nepher-ai/nepher-subnet.git && cd nepher-subnet
 
-### 7d. Install Dependencies
-
-Use Isaac Lab's Python environment to install dependencies:
-
-```bash
-# Install nepher-subnet and dependencies
 ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e .
-
-# Install the nepher (envhub) package (required for validators)
 ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install nepher
-
-# Clone and install eval-nav
 git clone https://github.com/nepher-ai/eval-nav.git ./eval-nav
 ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e ./eval-nav
 ```
 
-### 7e. Configure
+### Configure & Run
 
 ```bash
-# Copy config
 cp config/validator_config.example.yaml config/validator_config.yaml
-
-# Edit with your settings
-nano config/validator_config.yaml
-
-# Set your API key
 export NEPHER_API_KEY=nepher_your_actual_api_key_here
-```
 
-### 7f. Run the Validator
-
-```bash
-# Using the start script
-export NEPHER_API_KEY=nepher_your_actual_api_key_here
+# Any of these work:
 ./scripts/start_validator.sh --config config/validator_config.yaml
-
-# OR using the CLI directly
 nepher-validator run --config config/validator_config.yaml
-
-# OR using Python module
 python -m validator run --config config/validator_config.yaml
 
-# With verbose logging
-nepher-validator run --config config/validator_config.yaml --verbose
-
-# With JSON logs (for production / log aggregation)
-nepher-validator run --config config/validator_config.yaml --json-logs
-
-# With a log file
-nepher-validator run --config config/validator_config.yaml --log-file /var/log/nepher-validator.log
+# Useful flags: --verbose, --json-logs, --log-file /var/log/nepher-validator.log
 ```
 
-### 7g. Run as a Background Service (systemd)
+### Run as systemd Service (optional)
 
-For production, set up a systemd service so the validator auto-restarts:
-
-```bash
-sudo nano /etc/systemd/system/nepher-validator.service
-```
-
-Paste the following (adjust paths as needed):
+Create `/etc/systemd/system/nepher-validator.service`:
 
 ```ini
 [Unit]
@@ -456,69 +235,52 @@ RestartSec=30
 WantedBy=multi-user.target
 ```
 
-Enable and start:
-
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable nepher-validator
-sudo systemctl start nepher-validator
-
-# Check status
-sudo systemctl status nepher-validator
-
-# View logs
+sudo systemctl enable --now nepher-validator
 journalctl -u nepher-validator -f
 ```
 
 ---
 
-## 8. Configuration Reference
+## 7. Configuration Reference
 
-The validator config file (`config/validator_config.yaml`) supports these options:
+Full config (`config/validator_config.yaml`):
 
 ```yaml
-# Subnet configuration
 subnet:
-  network: "finney"            # finney | test | local
-  subnet_uid: 49               # Nepher subnet UID
+  network: "finney"              # finney | test | local
+  subnet_uid: 49
 
-# Tournament API
 tournament:
   api_url: "https://tournament-api.nepher.ai"
-  api_key: "${NEPHER_API_KEY}"  # Resolved from environment
+  api_key: "${NEPHER_API_KEY}"
 
-# Wallet
 wallet:
-  name: "validator"             # Wallet name
-  hotkey: "default"             # Hotkey name
-  # path: "/custom/path"        # Optional custom wallet path
+  name: "validator"
+  hotkey: "default"
 
-# Isaac Lab / Sim versions
 isaac:
   lab_version: "2.3.0"
   sim_version: "5.1"
 
-# Paths
 paths:
-  workspace: "./workspace"      # Working directory for evaluations
-  eval_repo: "./eval-nav"       # Evaluation repository path
-  env_cache: "~/.cache/nepher"  # Cached environments
+  workspace: "./workspace"
+  eval_repo: "./eval-nav"
+  env_cache: "~/.cache/nepher"
 
-# Retry settings
 retry:
-  network_max_attempts: 3          # API request retries
-  network_initial_delay: 1.0       # Seconds
-  network_max_delay: 30.0          # Seconds
+  network_max_attempts: 3
+  network_initial_delay: 1.0
+  network_max_delay: 30.0
   network_backoff_factor: 2.0
-  evaluation_max_attempts: 2       # Evaluation retries per agent
-  evaluation_timeout_seconds: 3600 # 1 hour per agent evaluation
-  weight_setting_max_attempts: 5   # Weight-setting retries
+  evaluation_max_attempts: 2
+  evaluation_timeout_seconds: 3600
+  weight_setting_max_attempts: 5
   weight_setting_initial_delay: 5.0
 ```
 
-### Environment Variables
-
-Values in the config can reference environment variables using `${VAR}` or `${VAR:-default}` syntax.
+Config values support `${VAR}` and `${VAR:-default}` environment variable substitution.
 
 | Variable | Description | Default |
 |---|---|---|
@@ -533,272 +295,103 @@ Values in the config can reference environment variables using `${VAR}` or `${VA
 
 ---
 
-## 9. Health Check
-
-Before running the validator, verify everything is set up correctly:
+## 8. Health Check
 
 ```bash
-# Run the built-in health check script
 python scripts/health_check.py
 ```
 
-Expected output when everything is configured:
-
-```
-==================================================
-Nepher Subnet Health Check
-==================================================
-
-Checking Python version... ✅ Python 3.10.x
-Checking nepher_core... ✅ Version x.x.x
-Checking bittensor... ✅ Installed
-Checking nepher (envhub)... ✅ Installed
-Checking Isaac Lab... ✅ Found at /path/to/isaac-lab
-Checking API key... ✅ Set (nepher_y...)
-Checking wallet... ✅ Found validator/default
-
-==================================================
-✅ All checks passed (7/7)
-```
-
-If any checks fail, address them before starting the validator.
+All 7 checks (Python version, nepher_core, bittensor, nepher envhub, Isaac Lab, API key, wallet) should show ✅.
 
 ---
 
-## 10. Monitoring & Logs
-
-### Docker Setup
+## 9. Monitoring & Logs
 
 ```bash
-# Real-time logs
+# Docker
 docker compose logs -f validator
-
-# Last 100 lines
 docker compose logs --tail 100 validator
-
-# Container resource usage
 docker stats
-```
 
-### Native Setup
-
-```bash
-# If using systemd
+# Native / systemd
 journalctl -u nepher-validator -f
-
-# If using --log-file flag
 tail -f /var/log/nepher-validator.log
 ```
 
-### What to Watch For
+### Key Log Messages
 
-| Log Message | Meaning |
+| Message | Meaning |
 |---|---|
-| `Entering main loop  api_url=...` | Validator initialized and starting to poll the API. |
-| `[iter N] Checking for active tournament...` | Polling the API for an active tournament (iteration counter). |
-| `Fetching active tournament from ...` | HTTP request being sent to the tournament API. |
-| `No active tournament. Sleeping 300s...` | Normal — no tournament running right now. Polls every 5 min. |
-| `Active tournament found: ... (status=...)` | A tournament was detected. Validator will act on it. |
-| `[iter N] Tournament ... — period=CONTEST` | Tournament is in contest phase. Validators wait. |
-| `Starting validator setup phase` | Submit window started. Downloading configs & envs. |
-| `Setup phase complete!` | Environments and configs ready for evaluation. |
-| `Starting evaluation loop` | Evaluation period started. Processing submitted agents. |
-| `Found X pending agents` | Agents are being evaluated. |
-| `✅ Evaluation complete for agent: ...` | An agent was successfully evaluated. |
-| `Starting reward phase` | Setting weights to the tournament winner. |
-| `✅ Weights set successfully to UID X` | Weights committed on chain. |
-| `Tournament completed` | Cycle done. Resets and waits for next tournament. |
-| `[iter N] Main loop error: ...` | Something went wrong. Check the error message. Retries in 60s. |
+| `Entering main loop ...` | Validator initialized, polling started. |
+| `No active tournament. Sleeping 300s...` | Normal — no tournament running. Polls every 5 min. |
+| `Active tournament found: ...` | Tournament detected; validator will act. |
+| `Starting evaluation loop` / `Found X pending agents` | Evaluating submitted agents. |
+| `✅ Evaluation complete for agent: ...` | Agent evaluated successfully. |
+| `✅ Weights set successfully to UID X` | Weights committed on-chain. |
+| `Tournament completed` | Cycle done; waiting for next tournament. |
+| `[iter N] Main loop error: ...` | Error occurred; retries in 60 s. |
 
 ---
 
-## 11. Troubleshooting
+## 10. Troubleshooting
 
-### CUDA Driver Initialization Failed / GPU Not Detected in Docker
-
-If the validator starts but evaluation fails with:
-
-```
-RuntimeError: CUDA driver initialization failed, you might not have a CUDA gpu.
-```
-
-This means the container cannot access the host GPU. Follow these steps **on the host** (not inside the container):
+### CUDA / GPU Not Detected in Docker
 
 ```bash
-# 1. Verify the host GPU works
-nvidia-smi
+nvidia-smi                                     # Host GPU OK?
+docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi  # GPU in Docker?
 
-# 2. Verify the NVIDIA Container Toolkit is installed
-dpkg -l | grep nvidia-container-toolkit
-
-# 3. Test GPU access from a Docker container
-docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
-
-# 4. If step 3 fails, install / reconfigure the toolkit:
+# If the above fails:
 sudo apt install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
-
-# 5. Retry step 3 — it must succeed before the validator will work
-
-# 6. Rebuild and restart the validator
 docker compose up -d --build validator
-docker compose logs -f validator
 ```
 
-> **Tip:** The entrypoint now runs a GPU pre-flight check. If CUDA is not
-> accessible, the container will exit immediately with a clear error message
-> instead of failing deep inside evaluation.
+> The entrypoint runs a GPU pre-flight check — the container will exit immediately with a clear message if CUDA is inaccessible.
 
 ### Wallet Not Found
 
-```bash
-# Check wallet exists
-ls ~/.bittensor/wallets/validator/
-
-# Should contain:
-#   coldkey
-#   coldkeypub.txt
-#   hotkeys/default
-
-# If using Docker, ensure the volume mount is correct in docker-compose.yaml:
-#   - ~/.bittensor:/root/.bittensor:ro
-```
+Ensure `~/.bittensor/wallets/validator/` contains `coldkey`, `coldkeypub.txt`, and `hotkeys/default`. For Docker, confirm the volume mount `~/.bittensor:/root/.bittensor:ro` in `docker-compose.yaml`.
 
 ### API Key Issues
 
 ```bash
-# Verify the env var is set
-echo $NEPHER_API_KEY
-
-# If using Docker, check .env file is being loaded
-docker compose config | grep NEPHER_API_KEY
+echo $NEPHER_API_KEY                          # Env var set?
+docker compose config | grep NEPHER_API_KEY   # Docker picking it up?
 ```
 
-### Isaac Lab / Sim Not Found (Native Setup)
+### Isaac Lab / Sim Not Found (Native)
 
-```bash
-# Verify environment variables
-echo $ISAACLAB_PATH
-echo $ISAACSIM_PATH
-
-# Make sure they're in your ~/.bashrc for persistence
-grep ISAAC ~/.bashrc
-
-# If missing, add them:
-echo 'export ISAACLAB_PATH=/path/to/isaac-lab' >> ~/.bashrc
-echo 'export ISAACSIM_PATH=/path/to/isaac-sim' >> ~/.bashrc
-source ~/.bashrc
-```
+Ensure `ISAACLAB_PATH` and `ISAACSIM_PATH` are exported in `~/.bashrc`.
 
 ### Evaluation Timeout
 
-If agent evaluations are timing out (default: 1 hour), you can increase the timeout in your config:
-
-```yaml
-retry:
-  evaluation_timeout_seconds: 7200  # 2 hours
-```
+Increase in config: `retry.evaluation_timeout_seconds: 7200`
 
 ### Weight Setting Failures
 
-Weight setting can fail due to network congestion. The validator retries with exponential backoff automatically. If it still fails:
-
-- Ensure your wallet has enough staked TAO
-- Verify you're registered on Subnet 49: `btcli subnet list --netuid 49`
-- Check network connectivity to Bittensor chain
+Retries are automatic with exponential backoff. If persistent, verify: sufficient staked TAO, registration on Subnet 49 (`btcli subnet list --netuid 49`), and chain connectivity.
 
 ### Docker Build Fails
 
 ```bash
-# Clean build (no cache)
 docker compose build --no-cache validator
-
-# Check disk space (Isaac Sim image is ~20 GB)
-df -h
+df -h   # Isaac Sim image is ~20 GB — check disk space
 ```
 
-### Container Keeps Restarting
+### Validator Hangs After Startup Banner
 
 ```bash
-# Check exit logs
-docker compose logs --tail 50 validator
-
-# Common causes:
-# - Missing API key
-# - Wallet not mounted properly
-# - GPU not accessible
-```
-
-### Validator Stuck After Startup Logs / No Output After "Subnet UID: 49"
-
-If the validator prints the startup banner but shows no further output, the API call is likely hanging (network/DNS issue inside the container).
-
-```bash
-# 1. Rebuild the image to pick up latest logging improvements
-docker compose up -d --build validator
-
-# 2. Follow logs — you should now see "Entering main loop" and iteration logs
-docker compose logs -f validator
-
-# 3. If the API call hangs, test connectivity from inside the container
+docker compose up -d --build validator        # Rebuild for latest logging
 docker compose exec validator bash -c "curl -sI https://tournament-api.nepher.ai/api/v1/tournaments/active"
-
-# 4. If DNS fails, check Docker network or add a DNS server to docker-compose.yaml:
-#    dns:
-#      - 8.8.8.8
-```
-
----
-
-## Quick Reference — Cheat Sheet
-
-```bash
-# ──────────────────────────────────────────────
-# DOCKER SETUP (Recommended)
-# ──────────────────────────────────────────────
-
-# 1. Clone
-git clone https://github.com/nepher-ai/nepher-subnet.git && cd nepher-subnet
-
-# 2. Configure
-cp config/docker.env.example .env
-cp config/validator_config.example.yaml config/validator_config.yaml
-nano .env  # Set NEPHER_API_KEY
-
-# 3. Build
-docker compose build validator
-
-# 4. Run
-docker compose up -d validator
-
-# 5. Check logs
-docker compose logs -f validator
-
-# ──────────────────────────────────────────────
-# NATIVE SETUP
-# ──────────────────────────────────────────────
-
-# 1. Clone
-git clone https://github.com/nepher-ai/nepher-subnet.git && cd nepher-subnet
-
-# 2. Install
-${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e .
-${ISAACLAB_PATH}/isaaclab.sh -p -m pip install nepher
-
-# 3. Configure
-cp config/validator_config.example.yaml config/validator_config.yaml
-export NEPHER_API_KEY=your_key_here
-
-# 4. Run
-nepher-validator run --config config/validator_config.yaml
+# If DNS fails, add to docker-compose.yaml: dns: ["8.8.8.8"]
 ```
 
 ---
 
 ## Need Help?
 
-- **Documentation:** https://docs.nepher.ai
+- **Docs:** https://docs.nepher.ai
 - **Discord:** https://discord.gg/nepher
-- **GitHub Issues:** https://github.com/nepher-ai/nepher-subnet/issues
-
+- **Issues:** https://github.com/nepher-ai/nepher-subnet/issues
