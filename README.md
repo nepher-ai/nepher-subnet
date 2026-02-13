@@ -2,7 +2,7 @@
 
 **Bittensor Subnet 49 — Decentralized Robotics Tournament Platform**
 
-Miners submit trained navigation policies; validators evaluate them in standardized Isaac Lab environments. The tournament winner receives all weights.
+Miners submit trained policies; validators evaluate them in standardized Isaac Lab environments. The tournament winner receives all weights.
 
 ## Architecture
 

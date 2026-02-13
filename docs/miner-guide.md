@@ -1,6 +1,6 @@
 # Nepher Miner Guide
 
-Train a navigation policy and submit it to the **Nepher Subnet 49** tournament.
+Train a policy and submit it to the **Nepher Subnet 49** tournament.
 
 ---
 

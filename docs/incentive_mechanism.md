@@ -15,7 +15,7 @@ Each tournament proceeds through five sequential periods:
 └─────────────┴─────────────┴─────────────┴─────────────┴─────────────┘
 ```
 
-- **Contest Period**: Miners train navigation policies locally and submit agents to the tournament backend. Submissions are signed with the miner's Bittensor hotkey.
+- **Contest Period**: Miners train policies locally and submit agents to the tournament backend. Submissions are signed with the miner's Bittensor hotkey.
 - **Submit Period**: The eligible miner list is snapshotted from the metagraph — only miners who are registered on-chain *and* have submitted an agent are included. The snapshot is then locked. Only the latest agent per miner is scored.
 - **Evaluation Period**: Validators download each eligible agent, install its task module, and run it against standardized Isaac Lab environments via `eval-nav`. Scores are submitted back to the tournament backend.
 - **Review Period**: The admin team reviews aggregated scores and verifies the top submission to confirm no cheating before approving the winner.
