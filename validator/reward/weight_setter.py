@@ -99,7 +99,7 @@ class WeightSetter:
         logger.info("Starting reward phase")
         logger.info("=" * 60)
         
-        while is_reward_period_fn():
+        while await is_reward_period_fn():
             # Refresh metagraph each cycle
             metagraph = self._get_metagraph()
             logger.info(f"Loaded metagraph with {len(metagraph.uids)} UIDs")
@@ -115,7 +115,7 @@ class WeightSetter:
                 f"Weights set. Next weight-setting in {self.WEIGHT_SET_INTERVAL}s..."
             )
             elapsed = 0
-            while elapsed < self.WEIGHT_SET_INTERVAL and is_reward_period_fn():
+            while elapsed < self.WEIGHT_SET_INTERVAL and await is_reward_period_fn():
                 await asyncio.sleep(60)
                 elapsed += 60
         

@@ -225,8 +225,10 @@ class ValidatorOrchestrator:
                 validator_hotkey=self.validator_hotkey,
             )
         
-        def is_evaluation_period() -> bool:
-            return get_current_period(tournament) == TournamentPeriod.EVALUATION
+        async def is_evaluation_period() -> bool:
+            """Re-fetch tournament each check so schedule changes are detected."""
+            fresh = await self.api.get_active_tournament()
+            return get_current_period(fresh) == TournamentPeriod.EVALUATION
         
         await self._evaluation_orchestrator.run_evaluation_loop(
             tournament=tournament,
@@ -238,8 +240,10 @@ class ValidatorOrchestrator:
         if self._weight_setter is None:
             self._weight_setter = WeightSetter(self.config, self.api)
         
-        def is_reward_period() -> bool:
-            return get_current_period(tournament) == TournamentPeriod.REWARD
+        async def is_reward_period() -> bool:
+            """Re-fetch tournament each check so schedule changes are detected."""
+            fresh = await self.api.get_active_tournament()
+            return get_current_period(fresh) == TournamentPeriod.REWARD
         
         await self._weight_setter.run_reward(
             tournament=tournament,

@@ -80,7 +80,7 @@ class EvaluationOrchestrator:
         logger.info("Starting evaluation loop")
         logger.info("=" * 60)
         
-        while is_evaluation_period_fn():
+        while await is_evaluation_period_fn():
             try:
                 await self._process_pending_agents(tournament)
             except Exception as e:
