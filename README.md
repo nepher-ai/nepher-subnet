@@ -76,7 +76,6 @@ Nepher is a decentralized robotics tournament platform on Bittensor that enables
 
 3. **Run with Docker:**
    ```bash
-   export NEPHER_API_KEY=your_api_key
    docker-compose up validator
    ```
 
@@ -101,7 +100,7 @@ pip install -e ".[dev]"
 
 ## Configuration
 
-Copy the example config and customize:
+Shared settings (subnet, isaac, paths, retry) live in `config/common_config.yaml` which ships with the repo. Copy the user-specific example and customize:
 
 ```bash
 # For miners
@@ -111,13 +110,17 @@ cp config/miner_config.example.yaml config/miner_config.yaml
 cp config/validator_config.example.yaml config/validator_config.yaml
 ```
 
+The loader automatically merges `common_config.yaml` with your user config — user values override shared defaults.
+
 Config values can be set via: **CLI args > config file > environment variables > defaults**
 
 | Environment Variable | Description | Default |
 |---------------------|-------------|---------|
-| `NEPHER_API_KEY` | Tournament API key | Required |
 | `WALLET_NAME` | Bittensor wallet name | miner/validator |
 | `WALLET_HOTKEY` | Bittensor hotkey name | default |
+| `EVAL_REPO_URL` | Eval repo Git URL | `https://github.com/nepher-ai/eval-nav.git` |
+
+> **API key** is set directly in your `validator_config.yaml` / `miner_config.yaml` — not as an environment variable.
 
 ## Agent Structure
 
@@ -152,14 +155,11 @@ docker build -f docker/Dockerfile.validator -t nepher-validator .
 ### Run with Docker Compose
 
 ```bash
-# Set environment
-export NEPHER_API_KEY=your_api_key
-
 # Run validator
 docker-compose up validator
 
 # Submit agent
-docker-compose run miner submit --path /app/agent --api-key $NEPHER_API_KEY
+docker-compose run miner submit --path /app/agent --config /app/config/miner_config.yaml
 ```
 
 ## Development

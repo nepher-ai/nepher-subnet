@@ -302,7 +302,7 @@ class SetupManager:
         # Step 5: Setup evaluation repo
         logger.info("Step 5: Setting up evaluation repository...")
         await setup_eval_repo(
-            repo_url="https://github.com/nepher-ai/eval-nav.git",
+            repo_url=self.config.paths.eval_repo_url,
             target_path=self.config.paths.eval_repo,
         )
         

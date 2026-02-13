@@ -1,0 +1,42 @@
+# Nepher Common Configuration
+# Shared settings for all validators and miners.
+# This file is maintained by the project — do not edit unless you know what you're doing.
+# User-specific settings (wallet, api_key) go in validator_config.yaml or miner_config.yaml.
+
+# Subnet configuration
+subnet:
+  network: "finney"
+  subnet_uid: 49
+
+# Tournament API endpoint
+tournament:
+  api_url: "https://tournament-api.nepher.ai"
+
+# Isaac Lab/Sim version requirements
+isaac:
+  lab_version: "2.3.0"
+  sim_version: "5.1"
+
+# Paths configuration
+paths:
+  workspace: "${NEPHER_WORKSPACE:-./workspace}"
+  eval_repo: "${NEPHER_EVAL_REPO:-./eval-nav}"
+  eval_repo_url: "${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}"
+  env_cache: "${NEPHER_ENV_CACHE:-~/.cache/nepher}"
+
+# Retry configuration
+retry:
+  # Network request retries
+  network_max_attempts: 3
+  network_initial_delay: 1.0
+  network_max_delay: 30.0
+  network_backoff_factor: 2.0
+
+  # Evaluation retries
+  evaluation_max_attempts: 2
+  evaluation_timeout_seconds: 3600   # 1 hour per agent
+
+  # Weight setting retries
+  weight_setting_max_attempts: 5
+  weight_setting_initial_delay: 5.0
+

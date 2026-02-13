@@ -85,19 +85,50 @@ def save_yaml(data: dict[str, Any], path: Path) -> None:
     logger.debug(f"Saved configuration to {path}")
 
 
+COMMON_CONFIG_FILENAME = "common_config.yaml"
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Deep-merge *override* into *base* (override values win)."""
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
 def load_config(path: Path, config_class: Type[T]) -> T:
     """
     Load and validate configuration from YAML file.
-    
+
+    Automatically loads ``common_config.yaml`` from the same directory
+    (if present) and deep-merges the user config on top so that user
+    values override the shared defaults.
+
     Args:
-        path: Path to YAML file
+        path: Path to user YAML file (validator_config / miner_config)
         config_class: Pydantic model class to validate against
-        
+
     Returns:
         Validated configuration instance
     """
-    data = load_yaml(path)
-    return config_class(**data)
+    # Load shared common config if it exists alongside the user config
+    common_path = path.parent / COMMON_CONFIG_FILENAME
+    if common_path.exists():
+        base_data = load_yaml(common_path)
+        logger.info(f"Loaded common configuration from {common_path}")
+    else:
+        base_data = {}
+
+    # Load user-specific config
+    user_data = load_yaml(path)
+
+    # Deep-merge: user values take precedence over common values
+    merged = _deep_merge(base_data, user_data)
+
+    return config_class(**merged)
 
 
 class ConfigManager:

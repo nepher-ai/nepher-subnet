@@ -21,10 +21,10 @@ if [ ! -f "$CONFIG_PATH" ]; then
     exit 1
 fi
 
-# Check for API key
-if [ -z "$NEPHER_API_KEY" ]; then
-    echo "Warning: NEPHER_API_KEY environment variable not set"
-    echo "Make sure it's configured in your config file or environment"
+# Check for API key in config
+if ! grep -q 'api_key:' "$CONFIG_PATH" 2>/dev/null; then
+    echo "Warning: api_key not found in $CONFIG_PATH"
+    echo "Make sure tournament.api_key is set in your config file"
 fi
 
 echo "=============================================="

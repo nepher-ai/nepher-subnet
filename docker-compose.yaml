@@ -32,6 +32,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.validator
+      args:
+        - EVAL_REPO_URL=${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}
     # Explicit NVIDIA runtime (requires nvidia-container-toolkit).
     # Works with all Docker Compose versions; the deploy.resources block
     # below is the newer equivalent but is ignored by some older runtimes.
@@ -57,9 +59,9 @@ services:
       - isaac-logs:/root/.nvidia-omniverse/logs
       - isaac-data:/root/.local/share/ov/data
     environment:
-      - NEPHER_API_KEY=${NEPHER_API_KEY}
       - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament-api.nepher.ai}
       - ENVHUB_API_URL=${ENVHUB_API_URL:-https://envhub-api.nepher.ai}
+      - EVAL_REPO_URL=${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}
       # Must match the nepher-env-cache volume mount so the nepher library
       - NEPHER_CACHE_DIR=/root/.cache/nepher
       - NVIDIA_VISIBLE_DEVICES=all

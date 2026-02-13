@@ -137,20 +137,24 @@ git clone https://github.com/nepher-ai/nepher-subnet.git && cd nepher-subnet
 
 ```bash
 cp config/docker.env.example .env
-nano .env   # Set NEPHER_API_KEY (required); optionally WALLET_NAME, WALLET_HOTKEY
+nano .env   # Optionally set WALLET_NAME, WALLET_HOTKEY, BITTENSOR_WALLET_PATH
 
 cp config/validator_config.example.yaml config/validator_config.yaml
-nano config/validator_config.yaml  # Verify network, subnet_uid, wallet settings
+nano config/validator_config.yaml  # Set your API key and wallet name/hotkey
 ```
 
-Key `.env` values:
+Key `config/validator_config.yaml` values:
 
-```bash
-NEPHER_API_KEY=nepher_your_actual_api_key_here
-# NEPHER_API_URL=https://tournament-api.nepher.ai   # default
-# WALLET_NAME=validator                              # default
-# WALLET_HOTKEY=default                              # default
+```yaml
+tournament:
+  api_key: "nepher_your_actual_api_key_here"
+
+wallet:
+  name: "validator"
+  hotkey: "default"
 ```
+
+> **Note:** Shared settings (subnet, isaac, paths, retry) live in `config/common_config.yaml` which ships with the repo. Your `validator_config.yaml` only needs wallet and API key — the loader merges both files automatically.
 
 ### Build & Run
 
@@ -193,7 +197,10 @@ cd ~ && git clone https://github.com/nepher-ai/nepher-subnet.git && cd nepher-su
 
 ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e .
 ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install nepher
-git clone https://github.com/nepher-ai/eval-nav.git ./eval-nav
+
+# Clone eval repo (URL is configurable via EVAL_REPO_URL or paths.eval_repo_url in config)
+EVAL_REPO_URL="${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}"
+git clone "${EVAL_REPO_URL}" ./eval-nav
 ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e ./eval-nav
 ```
 
@@ -201,7 +208,7 @@ ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e ./eval-nav
 
 ```bash
 cp config/validator_config.example.yaml config/validator_config.yaml
-export NEPHER_API_KEY=nepher_your_actual_api_key_here
+nano config/validator_config.yaml  # Set your API key and wallet name/hotkey
 
 # Any of these work:
 ./scripts/start_validator.sh --config config/validator_config.yaml
@@ -210,6 +217,8 @@ python -m validator run --config config/validator_config.yaml
 
 # Useful flags: --verbose, --json-logs, --log-file /var/log/nepher-validator.log
 ```
+
+> Shared settings are loaded from `config/common_config.yaml` alongside your `validator_config.yaml` automatically.
 
 ### Run as systemd Service (optional)
 
@@ -224,7 +233,6 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/root/nepher-subnet
-Environment="NEPHER_API_KEY=nepher_your_actual_api_key_here"
 Environment="ISAACLAB_PATH=/path/to/isaac-lab"
 Environment="ISAACSIM_PATH=/path/to/isaac-sim"
 ExecStart=/path/to/isaac-lab/isaaclab.sh -p -m validator run --config /root/nepher-subnet/config/validator_config.yaml
@@ -245,20 +253,24 @@ journalctl -u nepher-validator -f
 
 ## 7. Configuration Reference
 
-Full config (`config/validator_config.yaml`):
+Configuration is split into two layers:
+
+| File | Purpose | Checked in? |
+|---|---|---|
+| `config/common_config.yaml` | Shared / project-level settings | **Yes** (static) |
+| `config/validator_config.yaml` | User-specific settings (wallet, API key) | No (`.gitignore`d) |
+
+The config loader automatically merges both files — user values override common values.
+
+### `config/common_config.yaml` (static, ships with repo)
 
 ```yaml
 subnet:
-  network: "finney"              # finney | test | local
+  network: "finney"
   subnet_uid: 49
 
 tournament:
   api_url: "https://tournament-api.nepher.ai"
-  api_key: "${NEPHER_API_KEY}"
-
-wallet:
-  name: "validator"
-  hotkey: "default"
 
 isaac:
   lab_version: "2.3.0"
@@ -267,6 +279,7 @@ isaac:
 paths:
   workspace: "./workspace"
   eval_repo: "./eval-nav"
+  eval_repo_url: "https://github.com/nepher-ai/eval-nav.git"
   env_cache: "~/.cache/nepher"
 
 retry:
@@ -280,15 +293,28 @@ retry:
   weight_setting_initial_delay: 5.0
 ```
 
+### `config/validator_config.yaml` (user creates from example)
+
+```yaml
+tournament:
+  api_key: "your_api_key_here"
+
+wallet:
+  name: "validator"
+  hotkey: "default"
+```
+
+The API key is set **directly** in `validator_config.yaml` — no environment variable needed.
+
 Config values support `${VAR}` and `${VAR:-default}` environment variable substitution.
 
 | Variable | Description | Default |
 |---|---|---|
-| `NEPHER_API_KEY` | Tournament API key | **Required** |
 | `WALLET_NAME` | Bittensor wallet name | `validator` |
 | `WALLET_HOTKEY` | Bittensor hotkey name | `default` |
 | `NEPHER_WORKSPACE` | Workspace directory | `./workspace` |
-| `NEPHER_EVAL_REPO` | Eval repo path | `./eval-nav` |
+| `NEPHER_EVAL_REPO` | Eval repo local path | `./eval-nav` |
+| `EVAL_REPO_URL` | Eval repo Git URL | `https://github.com/nepher-ai/eval-nav.git` |
 | `NEPHER_ENV_CACHE` | Environment cache path | `~/.cache/nepher` |
 | `ISAACLAB_PATH` | Isaac Lab installation path | — |
 | `ISAACSIM_PATH` | Isaac Sim installation path | — |
@@ -357,8 +383,8 @@ Ensure `~/.bittensor/wallets/validator/` contains `coldkey`, `coldkeypub.txt`, a
 ### API Key Issues
 
 ```bash
-echo $NEPHER_API_KEY                          # Env var set?
-docker compose config | grep NEPHER_API_KEY   # Docker picking it up?
+grep api_key config/validator_config.yaml     # Key present in config?
+docker compose exec validator cat /app/config/validator_config.yaml  # Mounted correctly?
 ```
 
 ### Isaac Lab / Sim Not Found (Native)
@@ -367,7 +393,7 @@ Ensure `ISAACLAB_PATH` and `ISAACSIM_PATH` are exported in `~/.bashrc`.
 
 ### Evaluation Timeout
 
-Increase in config: `retry.evaluation_timeout_seconds: 7200`
+Increase in `common_config.yaml` (or override in your `validator_config.yaml`): `retry.evaluation_timeout_seconds: 7200`
 
 ### Weight Setting Failures
 

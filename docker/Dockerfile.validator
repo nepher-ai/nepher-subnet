@@ -64,8 +64,9 @@ COPY pyproject.toml .
 # Install packages
 RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e .
 
-# Clone eval-nav repository
-RUN git clone https://github.com/nepher-ai/eval-nav.git ./eval-nav \
+# Clone eval-nav repository (URL is configurable via build arg)
+ARG EVAL_REPO_URL=https://github.com/nepher-ai/eval-nav.git
+RUN git clone ${EVAL_REPO_URL} ./eval-nav \
     && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e ./eval-nav
 
 # Create directories for volumes and bittensor runtime dirs

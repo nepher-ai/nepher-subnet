@@ -55,13 +55,16 @@ class TournamentConfig(BaseModel):
         default="https://tournament-api.nepher.ai",
         description="Tournament API base URL",
     )
-    api_key: str = Field(description="API key for authentication")
+    api_key: str = Field(default="", description="API key for authentication")
 
     @field_validator("api_key", mode="before")
     @classmethod
-    def resolve_api_key(cls, v: str) -> str:
-        if v and v.startswith("${"):
+    def resolve_api_key(cls, v) -> str:
+        """Resolve API key from explicit value, ${VAR} syntax, or NEPHER_API_KEY env var."""
+        if v is not None and isinstance(v, str) and v.startswith("${"):
             return resolve_env_vars(v)
+        if not v:
+            return os.environ.get("NEPHER_API_KEY", "")
         return v
 
 
@@ -92,6 +95,10 @@ class PathsConfig(BaseModel):
     
     workspace: Path = Field(default=Path("./workspace"), description="Workspace directory")
     eval_repo: Path = Field(default=Path("./eval-nav"), description="Eval repo path")
+    eval_repo_url: str = Field(
+        default="https://github.com/nepher-ai/eval-nav.git",
+        description="Eval repo Git URL",
+    )
     env_cache: Path = Field(default=Path.home() / ".cache" / "nepher", description="Env cache")
 
     @field_validator("workspace", "eval_repo", "env_cache", mode="before")
@@ -100,6 +107,17 @@ class PathsConfig(BaseModel):
         if isinstance(v, str) and v.startswith("${"):
             v = resolve_env_vars(v)
         return Path(v).expanduser().resolve()
+
+    @field_validator("eval_repo_url", mode="before")
+    @classmethod
+    def resolve_url_vars(cls, v):
+        if isinstance(v, str) and v.startswith("${"):
+            v = resolve_env_vars(v)
+        if not v:
+            return os.environ.get(
+                "EVAL_REPO_URL", "https://github.com/nepher-ai/eval-nav.git"
+            )
+        return v
 
 
 class RetryConfig(BaseModel):
@@ -158,7 +176,7 @@ class ValidatorConfig(BaseModel):
     """Complete validator configuration."""
     
     subnet: SubnetConfig = Field(default_factory=SubnetConfig)
-    tournament: TournamentConfig
+    tournament: TournamentConfig = Field(default_factory=TournamentConfig)
     wallet: WalletConfig = Field(default_factory=WalletConfig)
     isaac: IsaacConfig = Field(default_factory=IsaacConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
@@ -181,7 +199,9 @@ class ValidatorConfig(BaseModel):
 class MinerConfig(BaseModel):
     """Miner configuration for submission."""
     
-    tournament: TournamentConfig
+    model_config = {"extra": "ignore"}
+
+    tournament: TournamentConfig = Field(default_factory=TournamentConfig)
     wallet: WalletConfig = Field(default_factory=WalletConfig)
     
     @property
