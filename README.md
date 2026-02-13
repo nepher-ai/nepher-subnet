@@ -1,221 +1,104 @@
-# Nepher Subnet
+# Nepher Robotics Subnet
 
-**Bittensor Subnet 49 - Robotics Tournament Platform**
+**Bittensor Subnet 49 — Decentralized Robotics Tournament Platform**
 
-Nepher is a decentralized robotics tournament platform on Bittensor that enables miners to submit trained navigation policies for evaluation by validators using standardized Isaac Lab environments.
+Miners submit trained navigation policies; validators evaluate them in standardized Isaac Lab environments. The tournament winner receives all weights.
 
-## Overview
-
-### Architecture
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     SHARED CORE LIBRARY                      │
-├─────────────────────────────────────────────────────────────┤
-│  nepher_core/                                                │
-│  ├── api/          # Tournament API client                   │
-│  ├── config/       # Configuration management                │
-│  ├── wallet/       # Bittensor wallet utilities              │
-│  └── utils/        # Common utilities                        │
-└─────────────────────────────────────────────────────────────┘
-           │                              │
-           ▼                              ▼
-    ┌─────────────┐              ┌─────────────────┐
-    │    MINER    │              │    VALIDATOR    │
-    │  (thin CLI) │              │ (evaluation +   │
-    │             │              │  weight logic)  │
-    └─────────────┘              └─────────────────┘
-```
-
-### Tournament Cycle
-
-```
-┌─────────────┬─────────────┬─────────────┬─────────────┬─────────────────┐
-│   CONTEST   │   SUBMIT    │ EVALUATION  │   REVIEW    │     REWARD      │
-│   PERIOD    │   WINDOW    │   PERIOD    │   STAGE     │    PERIOD       │
-├─────────────┼─────────────┼─────────────┼─────────────┼─────────────────┤
-│ Miners      │ Eligibility │ Validators  │ Admin       │ Winner gets     │
-│ submit      │ snapshot    │ evaluate    │ reviews     │ all weights     │
-│ agents      │ locked      │ agents      │ results     │                 │
-└─────────────┴─────────────┴─────────────┴─────────────┴─────────────────┘
+  nepher_core/          Shared library (API client, config, wallet, utils)
+       │
+  ┌────┴────┐
+  ▼         ▼
+miner/    validator/
+(submit)  (evaluate + set weights)
 ```
 
 ## Quick Start
 
-### For Miners
-
-1. **Clone and install:**
-   ```bash
-   git clone https://github.com/nepher-ai/nepher-subnet.git
-   cd nepher-subnet
-   pip install -e .
-   ```
-
-2. **Train your agent** locally using the evaluation environments
-
-3. **Configure and submit:**
-   ```bash
-   cp config/miner_config.example.yaml config/miner_config.yaml
-   # Edit with your wallet and API key settings
-   
-   nepher-miner submit --path ./my-agent --config config/miner_config.yaml
-   ```
-
-### For Validators
-
-1. **Prerequisites:**
-   - NVIDIA GPU (RTX A100+ recommended)
-   - Isaac Lab 2.3.0 + Isaac Sim 5.1
-   - Docker with NVIDIA Container Toolkit
-
-2. **Configure:**
-   ```bash
-   cp config/validator_config.example.yaml config/validator_config.yaml
-   # Edit with your settings
-   ```
-
-3. **Run with Docker:**
-   ```bash
-   docker-compose up validator
-   ```
-
-4. **Or run natively:**
-   ```bash
-   nepher-validator run --config config/validator_config.yaml
-   ```
-
-## Installation
+### Miners
 
 ```bash
-git clone https://github.com/nepher-ai/nepher-subnet.git
-cd nepher-subnet
+git clone https://github.com/nepher-ai/nepher-subnet.git && cd nepher-subnet
 pip install -e .
-```
 
-### For Development
-
-```bash
-pip install -e ".[dev]"
-```
-
-## Configuration
-
-Shared settings (subnet, isaac, paths, retry) live in `config/common_config.yaml` which ships with the repo. Copy the user-specific example and customize:
-
-```bash
-# For miners
 cp config/miner_config.example.yaml config/miner_config.yaml
+# Edit: set wallet + API key
 
-# For validators  
-cp config/validator_config.example.yaml config/validator_config.yaml
+nepher-miner submit --path ./my-agent --config config/miner_config.yaml
 ```
 
-The loader automatically merges `common_config.yaml` with your user config — user values override shared defaults.
+→ Full guide: [docs/miner-guide.md](docs/miner-guide.md)
 
-Config values can be set via: **CLI args > config file > environment variables > defaults**
+### Validators
 
-| Environment Variable | Description | Default |
-|---------------------|-------------|---------|
-| `WALLET_NAME` | Bittensor wallet name | miner/validator |
-| `WALLET_HOTKEY` | Bittensor hotkey name | default |
-| `EVAL_REPO_URL` | Eval repo Git URL | `https://github.com/nepher-ai/eval-nav.git` |
+Requires NVIDIA GPU (A100+ recommended), Isaac Sim 5.1, Isaac Lab 2.3.0, Docker + NVIDIA Container Toolkit.
 
-> **API key** is set directly in your `validator_config.yaml` / `miner_config.yaml` — not as an environment variable.
+```bash
+git clone https://github.com/nepher-ai/nepher-subnet.git && cd nepher-subnet
+
+cp config/docker.env.example .env
+cp config/validator_config.example.yaml config/validator_config.yaml
+# Edit: set wallet + API key
+
+docker compose build validator
+docker compose up -d validator
+```
+
+→ Full guide: [docs/validator-guide.md](docs/validator-guide.md)
 
 ## Agent Structure
-
-Submitted agents must follow this structure:
 
 ```
 my-agent/
 ├── best_policy/
-│   └── best_policy.pt          # Trained policy (REQUIRED)
+│   └── best_policy.pt            # Trained policy (required)
 ├── scripts/
-│   ├── list_envs.py            # Environment verification
+│   ├── list_envs.py
 │   └── rsl_rl/
-│       └── play.py             # Policy inference
+│       └── play.py               # Policy inference
 └── source/
-    └── <task_module>/          # e.g., leatherbacknav
-        ├── __init__.py
-        └── tasks/              # Task definitions
+    └── <task_module>/
+        └── tasks/
 ```
 
-## Docker
+## Configuration
 
-### Build Images
+Two-layer config — the loader merges both automatically (user values override shared defaults):
 
-```bash
-# Miner (lightweight)
-docker build -f docker/Dockerfile.miner -t nepher-miner .
+| File | Purpose |
+|---|---|
+| `config/common_config.yaml` | Shared defaults (ships with repo) |
+| `config/validator_config.yaml` / `miner_config.yaml` | Your wallet + API key (`.gitignore`d) |
 
-# Validator (GPU required)
-docker build -f docker/Dockerfile.validator -t nepher-validator .
-```
-
-### Run with Docker Compose
+## CLI Reference
 
 ```bash
-# Run validator
-docker-compose up validator
+# Miner
+nepher-miner submit   --path ./agent --config config/miner_config.yaml
+nepher-miner validate --path ./agent
 
-# Submit agent
-docker-compose run miner submit --path /app/agent --config /app/config/miner_config.yaml
+# Validator
+nepher-validator run --config config/validator_config.yaml [--verbose] [--json-logs]
 ```
 
 ## Development
 
-### Running Tests
-
 ```bash
+pip install -e ".[dev]"
 pytest tests/ -v --cov
-```
-
-### Code Quality
-
-```bash
-# Lint
 ruff check .
-
-# Type check
 mypy nepher_core miner validator
 ```
-
-## API Reference
-
-### Miner CLI
-
-```bash
-# Submit with config file (recommended)
-nepher-miner submit --path ./agent --config config/miner_config.yaml
-
-# Or with CLI args
-nepher-miner submit --path ./agent --wallet-name miner --wallet-hotkey default --api-key KEY
-
-# Validate agent structure
-nepher-miner validate --path ./agent
-```
-
-### Validator CLI
-
-```bash
-# Run validator
-nepher-validator run --config ./config/validator_config.yaml
-
-# With verbose logging
-nepher-validator run --config ./config/validator_config.yaml --verbose
-
-# With JSON logs (production)
-nepher-validator run --config ./config/validator_config.yaml --json-logs
-```
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
 
 ## Links
 
 - **Website:** https://nepher.ai
-- **Documentation:** https://docs.nepher.ai
-- **Tournament Platform:** https://tournament-api.nepher.ai
+- **Docs:** https://docs.nepher.ai
+- **Tournament:** https://tournament-api.nepher.ai
 - **Discord:** https://discord.gg/nepher
 
+## License
+
+MIT — see [LICENSE](LICENSE).
