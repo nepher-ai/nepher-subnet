@@ -94,6 +94,37 @@ services:
       retries: 3
       start_period: 120s
 
+  # =========================================================================
+  # CPU Validator Service (No GPU — weights & burn only)
+  # =========================================================================
+  validator-cpu:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.validator
+      args:
+        - EVAL_REPO_URL=${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}
+    # No runtime: nvidia — GPU not required
+    volumes:
+      # Wallet access (read-only)
+      - ${BITTENSOR_WALLET_PATH:-~/.bittensor}/wallets:/root/.bittensor/wallets:ro
+      # Configuration (read-only)
+      - ./config:/app/config:ro
+      # Logs (optional, for debugging)
+      - ./logs:/app/logs
+    environment:
+      - NEPHER_API_KEY=${NEPHER_API_KEY}
+      - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament-api.nepher.ai}
+    networks:
+      - nepher-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    # Entrypoint passes --mode cpu; GPU pre-flight checks are skipped
+    command: ["run", "--config", "/app/config/validator_config.yaml", "--mode", "cpu"]
+
 # =========================================================================
 # Networks
 # =========================================================================

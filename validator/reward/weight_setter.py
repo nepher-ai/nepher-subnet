@@ -83,6 +83,17 @@ class WeightSetter:
 
     WEIGHT_SET_INTERVAL = 3600  # Re-set weights every 1 hour
 
+    async def burn(self) -> None:
+        """
+        Burn on UID 0 — set all weight to ``BURN_UID``.
+        
+        Public helper used by the CPU validator for hourly burns
+        outside the reward period.
+        """
+        logger.info("Burning on UID 0")
+        metagraph = self._get_metagraph()
+        await self._set_weights(self.BURN_UID, metagraph)
+
     async def run_reward(
         self,
         tournament: Tournament,

@@ -46,6 +46,8 @@ docker compose build validator
 docker compose up -d validator
 ```
 
+> **Cost-saving split:** run `--mode cpu` on a cheap VPS for 24/7 weight-setting and burn, and only spin up the GPU machine during evaluation. See the [validator guide](docs/validator-guide.md#8-cpugpu-split-deployment).
+
 → Full guide: [docs/validator-guide.md](docs/validator-guide.md)
 
 ## Agent Structure
@@ -79,8 +81,11 @@ Two-layer config — the loader merges both automatically (user values override 
 nepher-miner submit   --path ./agent --config config/miner_config.yaml
 nepher-miner validate --path ./agent
 
-# Validator
+# Validator (GPU — default, full behaviour)
 nepher-validator run --config config/validator_config.yaml [--verbose] [--json-logs]
+
+# Validator (CPU — weights & burn only, no GPU needed)
+nepher-validator run --config config/validator_config.yaml --mode cpu
 ```
 
 ## Development

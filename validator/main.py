@@ -40,6 +40,11 @@ class ValidatorOrchestrator:
     3. Evaluate agents during evaluation period
     4. Set weights during reward period
     5. Reset and wait for next tournament
+    
+    Supports two run modes controlled by ``config.mode``:
+    - **gpu** (default): full behaviour — setup, evaluation, reward, burn.
+    - **cpu**: lightweight — reward (set-weights) and hourly burn only;
+      skips setup and evaluation entirely.
     """
 
     # Polling intervals (seconds)
@@ -48,6 +53,7 @@ class ValidatorOrchestrator:
     REVIEW_INTERVAL = 60  # 1 minute
     COMPLETED_INTERVAL = 300  # 5 minutes
     ERROR_INTERVAL = 60  # 1 minute
+    BURN_INTERVAL = 3600  # 1 hour — cadence for UID-0 burns in CPU mode
 
     def __init__(self, config: ValidatorConfig):
         """
@@ -57,6 +63,8 @@ class ValidatorOrchestrator:
             config: Validator configuration
         """
         self.config = config
+        self.mode = config.mode  # "gpu" or "cpu"
+        
         # Load wallet and get hotkey
         wallet = load_wallet(
             name=config.wallet.name,
@@ -90,6 +98,7 @@ class ValidatorOrchestrator:
         """
         logger.info("=" * 60)
         logger.info("Nepher Validator Starting")
+        logger.info(f"Mode: {self.mode.upper()}")
         logger.info(f"Validator Hotkey: {self.validator_hotkey}")
         logger.info(f"Network: {self.config.subnet.network}")
         logger.info(f"Subnet UID: {self.config.subnet.subnet_uid}")
@@ -155,22 +164,33 @@ class ValidatorOrchestrator:
         """
         Handle current tournament period.
         
+        Behaviour depends on ``self.mode``:
+        - **gpu** (default): full lifecycle — setup, evaluation, reward, idle waits.
+        - **cpu**: reward + hourly burn only; evaluation/setup are skipped.
+        
         Args:
             tournament: Current tournament
             period: Current period
         """
         match period:
+            # ── Shared across both modes ─────────────────────────────
             case TournamentPeriod.NO_TOURNAMENT:
                 self.state.reset()
                 await asyncio.sleep(self.NO_TOURNAMENT_INTERVAL)
-                
+
+            case TournamentPeriod.REWARD:
+                await self._run_reward(tournament)
+
+            # ── CPU-only: burn on UID 0 once per hour ────────────────
+            case _ if self.mode == "cpu":
+                await self._hourly_burn()
+
+            # ── GPU-only handlers (full behaviour) ───────────────────
             case TournamentPeriod.CONTEST:
-                # Validators don't do anything during contest
                 logger.debug("Contest period - waiting...")
                 await asyncio.sleep(self.CONTEST_INTERVAL)
                 
             case TournamentPeriod.SUBMIT_WINDOW:
-                # Validators wait during submit window
                 logger.debug("Submit window - waiting for evaluation period...")
                 await asyncio.sleep(self.CONTEST_INTERVAL)
                     
@@ -183,16 +203,10 @@ class ValidatorOrchestrator:
                 await self._run_evaluation(tournament)
                 
             case TournamentPeriod.REVIEW:
-                # Wait for admin review
                 logger.info("Review period - waiting for admin approval...")
                 await asyncio.sleep(self.REVIEW_INTERVAL)
                 
-            case TournamentPeriod.REWARD:
-                # Run reward
-                await self._run_reward(tournament)
-                
             case TournamentPeriod.COMPLETED:
-                # Tournament complete - reset and wait
                 logger.info("Tournament completed")
                 self.state.reset()
                 await asyncio.sleep(self.COMPLETED_INTERVAL)
@@ -235,6 +249,21 @@ class ValidatorOrchestrator:
             is_evaluation_period_fn=is_evaluation_period,
         )
 
+    async def _hourly_burn(self) -> None:
+        """
+        Burn on UID 0 once, then sleep for ~1 hour.
+        
+        Used by the CPU validator during non-reward tournament periods
+        to maintain chain presence without running evaluations.
+        """
+        if self._weight_setter is None:
+            self._weight_setter = WeightSetter(self.config, self.api)
+        
+        await self._weight_setter.burn()
+        
+        logger.info(f"Burn complete. Next burn in ~{self.BURN_INTERVAL}s")
+        await asyncio.sleep(self.BURN_INTERVAL)
+
     async def _run_reward(self, tournament: Tournament) -> None:
         """Run reward phase."""
         if self._weight_setter is None:
@@ -251,15 +280,21 @@ class ValidatorOrchestrator:
         )
 
 
-async def run_validator(config_path: Path) -> None:
+async def run_validator(config_path: Path, mode: Optional[str] = None) -> None:
     """
     Run the validator with the given configuration.
     
     Args:
         config_path: Path to validator configuration file
+        mode: Optional run-mode override ("cpu" or "gpu").
+              When provided, takes precedence over the config file value.
     """
     # Load configuration
     config = load_config(config_path, ValidatorConfig)
+    
+    # CLI flag overrides config file value
+    if mode is not None:
+        config.mode = mode
     
     # Create and run orchestrator
     orchestrator = ValidatorOrchestrator(config)

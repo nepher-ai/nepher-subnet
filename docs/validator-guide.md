@@ -1,10 +1,21 @@
 # Nepher Validator Guide
 
-Set up and run a **Nepher Subnet 49 validator** on a GPU machine (RunPod, Vast.ai, Lambda, etc.).
+Set up and run a **Nepher Subnet 49 validator**.
+
+The validator supports two deployment modes:
+
+| Mode | What it does | Hardware |
+|---|---|---|
+| **GPU** (default) | Full lifecycle — evaluation, set-weights, burn | GPU machine (A100+ recommended) |
+| **CPU** | Set-weights & hourly burn only — no evaluation | Any cheap CPU VPS ($5–10/month) |
+
+Running a single GPU machine with the default mode works exactly as before. For cost savings you can **split** the workload: run `--mode gpu` on a GPU machine (only needed during evaluation periods) and `--mode cpu` on a cheap VPS (runs 24/7). See [Section 8 — CPU/GPU Split Deployment](#8-cpugpu-split-deployment) for details.
 
 ---
 
 ## 1. Requirements
+
+### GPU Validator (default)
 
 | Spec | Minimum | Recommended |
 |---|---|---|
@@ -15,6 +26,17 @@ Set up and run a **Nepher Subnet 49 validator** on a GPU machine (RunPod, Vast.a
 | **NVIDIA Driver / CUDA** | 535+ / 12.1+ | Latest stable / 12.1+ |
 
 **Software:** Isaac Sim 5.1, Isaac Lab 2.3.0, Python 3.10+, Docker + Compose, Git
+
+### CPU Validator (optional split)
+
+| Spec | Minimum |
+|---|---|
+| **CPU** | 2 vCPU |
+| **RAM** | 4 GB |
+| **Disk** | 20 GB |
+| **OS** | Ubuntu 22.04 LTS |
+
+**Software:** Python 3.10+, Docker + Compose (or native install), Git. No GPU, no Isaac Sim required.
 
 > Most GPU cloud providers ship drivers and Docker pre-installed — skip to [Step 3](#3-bittensor-wallet) if so.
 
@@ -111,7 +133,7 @@ wallet:
 > Shared settings live in `config/common_config.yaml` (ships with repo) and are merged automatically.
 
 ```bash
-# Build & run
+# Build & run (GPU validator — default mode)
 docker compose build validator          # First build: 30–60 min (Isaac Sim ~20 GB)
 docker compose up -d validator
 docker compose logs -f validator
@@ -122,6 +144,8 @@ docker compose restart validator        # Restart
 docker compose up -d --build validator  # Rebuild after updates
 docker compose exec validator bash      # Shell into container
 ```
+
+> **CPU-only mode (Docker):** `docker compose up -d validator-cpu` — see [Section 8](#8-cpugpu-split-deployment).
 
 ---
 
@@ -158,10 +182,13 @@ ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e ./eval-nav
 cp config/validator_config.example.yaml config/validator_config.yaml
 nano config/validator_config.yaml  # Set API key + wallet
 
-# Any of these work:
-./scripts/start_validator.sh --config config/validator_config.yaml
+# GPU validator (default — full behaviour):
 nepher-validator run --config config/validator_config.yaml
 python -m validator run --config config/validator_config.yaml
+./scripts/start_validator.sh --config config/validator_config.yaml
+
+# CPU validator (weights & burn only — no GPU needed):
+nepher-validator run --config config/validator_config.yaml --mode cpu
 ```
 
 <details><summary><b>Run as systemd service</b></summary>
@@ -204,7 +231,50 @@ python scripts/health_check.py   # All 7 checks should show ✅
 
 ---
 
-## 8. Troubleshooting
+## 8. CPU/GPU Split Deployment
+
+By default (`--mode gpu`) the validator handles everything on a single GPU machine. To save costs you can **split** the workload across two machines so the expensive GPU is only rented during evaluation periods.
+
+### How it works
+
+| Machine | Flag | Runs 24/7? | Responsibility |
+|---|---|---|---|
+| **CPU VPS** | `--mode cpu` | Yes | Set-weights during reward; burn on UID 0 every hour during all other periods |
+| **GPU instance** | `--mode gpu` (default) | Only during evaluation | Setup + evaluation + score submission |
+
+Both use the **same wallet, hotkey, and config**. No coordination channel is needed — each independently polls the tournament API and acts based on its mode.
+
+### Docker
+
+```bash
+# On the CPU VPS:
+docker compose up -d validator-cpu
+
+# On the GPU machine (only during evaluation):
+docker compose up -d validator
+```
+
+The `validator-cpu` service in `docker-compose.yaml` uses the same image but has no GPU runtime, no Isaac Sim cache volumes, and passes `--mode cpu` automatically.
+
+### Native
+
+```bash
+# CPU machine:
+nepher-validator run --config config/validator_config.yaml --mode cpu
+
+# GPU machine:
+nepher-validator run --config config/validator_config.yaml
+```
+
+### Tips
+
+- The GPU machine can be **stopped** after evaluation ends — the CPU validator handles all chain operations.
+- If both happen to run during the reward period, they set identical weights. The overlap is harmless.
+- You can also set `mode: cpu` in `validator_config.yaml` instead of passing the CLI flag every time.
+
+---
+
+## 9. Troubleshooting
 
 | Issue | Fix |
 |---|---|
