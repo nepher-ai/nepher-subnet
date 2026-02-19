@@ -9,7 +9,7 @@ The validator supports two deployment modes:
 | **GPU** (default) | Full lifecycle — evaluation, set-weights, burn | GPU machine (A100+ recommended) |
 | **CPU** | Set-weights & hourly burn only — no evaluation | Any cheap CPU VPS ($5–10/month) |
 
-Running a single GPU machine with the default mode works exactly as before. For cost savings you can **split** the workload: run `--mode gpu` on a GPU machine (only needed during evaluation periods) and `--mode cpu` on a cheap VPS (runs 24/7). See [Section 8 — CPU/GPU Split Deployment](#8-cpugpu-split-deployment) for details.
+A single GPU machine with the default mode handles everything. For cost savings you can split the workload across two machines — see [Section 8](#8-cpugpu-split-deployment).
 
 ---
 
@@ -86,6 +86,8 @@ sudo apt install -y docker-compose-plugin
 
 ## 3. Bittensor Wallet
 
+> **Prerequisite:** Install the Bittensor CLI (`btcli`) if you haven't already — see the [Bittensor docs](https://docs.bittensor.com/).
+
 Register and stake on Subnet 49:
 
 ```bash
@@ -99,8 +101,7 @@ Wallet files: `~/.bittensor/wallets/validator/`
 
 ## 4. Get Your Nepher API Key
 
-1. Sign in at **https://account.nepher.ai**
-2. **API Keys** → copy your API key
+Sign in at **https://account.nepher.ai** → **API Keys** → copy your key.
 
 ---
 
@@ -114,13 +115,13 @@ cp config/docker.env.example .env
 cp config/validator_config.example.yaml config/validator_config.yaml
 ```
 
-Set your API key in `.env`:
+Edit **`.env`** (used by Docker Compose to inject environment variables):
 
 ```bash
 NEPHER_API_KEY=nepher_your_actual_api_key_here
 ```
 
-Set wallet details in `config/validator_config.yaml`:
+Edit **`config/validator_config.yaml`** (used by the validator process at runtime):
 
 ```yaml
 tournament:
@@ -130,7 +131,7 @@ wallet:
   hotkey: "default"
 ```
 
-> Shared settings live in `config/common_config.yaml` (ships with repo) and are merged automatically.
+> **Why both?** `.env` passes the key into the container environment; `validator_config.yaml` is read by the validator itself. Keep them in sync. Shared settings live in `config/common_config.yaml` (ships with repo) and are merged automatically.
 
 ```bash
 # Build & run (GPU validator — default mode)
@@ -184,8 +185,6 @@ nano config/validator_config.yaml  # Set API key + wallet
 
 # GPU validator (default — full behaviour):
 nepher-validator run --config config/validator_config.yaml
-python -m validator run --config config/validator_config.yaml
-./scripts/start_validator.sh --config config/validator_config.yaml
 
 # CPU validator (weights & burn only — no GPU needed):
 nepher-validator run --config config/validator_config.yaml --mode cpu
@@ -202,7 +201,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+User=root  # adjust to a dedicated service user if preferred
 WorkingDirectory=/root/nepher-subnet
 Environment="ISAACLAB_PATH=/path/to/isaac-lab"
 Environment="ISAACSIM_PATH=/path/to/isaac-sim"
@@ -226,23 +225,23 @@ journalctl -u nepher-validator -f
 ## 7. Health Check
 
 ```bash
-python scripts/health_check.py   # All 7 checks should show ✅
+python scripts/health_check.py   # All checks should show ✅
 ```
+
+The script verifies: GPU availability, Isaac Sim/Lab paths, API key validity, wallet presence, subnet registration, chain connectivity, and Docker runtime (if applicable). If a specific check fails, refer to [Troubleshooting](#9-troubleshooting).
 
 ---
 
 ## 8. CPU/GPU Split Deployment
 
-By default (`--mode gpu`) the validator handles everything on a single GPU machine. To save costs you can **split** the workload across two machines so the expensive GPU is only rented during evaluation periods.
-
-### How it works
+Split the workload across two machines so the expensive GPU is only rented during evaluation periods.
 
 | Machine | Flag | Runs 24/7? | Responsibility |
 |---|---|---|---|
 | **CPU VPS** | `--mode cpu` | Yes | Set-weights during reward; burn on UID 0 every hour during all other periods |
 | **GPU instance** | `--mode gpu` (default) | Only during evaluation | Setup + evaluation + score submission |
 
-Both use the **same wallet, hotkey, and config**. No coordination channel is needed — each independently polls the tournament API and acts based on its mode.
+Both use the **same wallet, hotkey, and config**. Each independently polls the tournament API — no coordination channel needed.
 
 ### Docker
 
@@ -254,7 +253,7 @@ docker compose up -d validator-cpu
 docker compose up -d validator
 ```
 
-The `validator-cpu` service in `docker-compose.yaml` uses the same image but has no GPU runtime, no Isaac Sim cache volumes, and passes `--mode cpu` automatically.
+The `validator-cpu` service uses a lightweight image (`python:3.10-slim`, ~200 MB) — no Isaac Sim, no NVIDIA drivers. It builds in under a minute.
 
 ### Native
 

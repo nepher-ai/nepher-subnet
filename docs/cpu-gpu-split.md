@@ -66,7 +66,8 @@ Add an optional `mode` field to `ValidatorConfig` (default `gpu`). The CLI flag 
 ### 5. Docker / Deployment
 
 - Existing `docker-compose.yaml` validator service remains the GPU validator (unchanged).
-- Add a second `validator-cpu` service: same image, no `runtime: nvidia`, no GPU resource reservation, entrypoint passes `--mode cpu`. Drop all Isaac Sim cache volumes.
+- Add a `Dockerfile.validator-cpu` based on `python:3.10-slim` — no Isaac Sim, no NVIDIA drivers, no eval-nav. Installs only the subnet package and its core dependencies (~200 MB vs ~20 GB for the GPU image).
+- Add a `validator-cpu` service in `docker-compose.yaml` using the lightweight image.
 - Operators who want the split run both services; operators who prefer the current single-machine setup change nothing.
 
 ## What stays the same
