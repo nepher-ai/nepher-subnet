@@ -223,15 +223,23 @@ class TournamentAPI:
     async def get_active_tournament(self) -> Optional[Tournament]:
         """
         Get the currently active tournament.
+
+        Passes ``subnet=true`` so the backend returns a minimized payload
+        (no YAML configs, no statistics, no block numbers) that contains
+        only the fields required by subnet validators.
         
         Returns:
             Tournament if active, None otherwise
             
-        Endpoint: GET /api/v1/tournaments/active
+        Endpoint: GET /api/v1/tournaments/active?subnet=true
         """
         try:
             logger.info(f"Fetching active tournament from {self.base_url}/api/v1/tournaments/active")
-            response = await self._request("GET", "/api/v1/tournaments/active")
+            response = await self._request(
+                "GET",
+                "/api/v1/tournaments/active",
+                params={"subnet": "true"},
+            )
             data = response.json()
             if data:
                 tournament = Tournament(**data)

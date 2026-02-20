@@ -51,6 +51,13 @@ def parse_args() -> argparse.Namespace:
         type=str,
         help="Path to log file",
     )
+    run_parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["cpu", "gpu"],
+        default=None,
+        help="Run mode: gpu (default, full behaviour) or cpu (weights/burn only)",
+    )
     
     return parser.parse_args()
 
@@ -59,7 +66,7 @@ async def async_main(args: argparse.Namespace) -> int:
     """Async main entry point."""
     if args.command == "run":
         try:
-            await run_validator(args.config)
+            await run_validator(args.config, mode=args.mode)
             return 0
         except KeyboardInterrupt:
             logger.info("Validator stopped by user")

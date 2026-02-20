@@ -182,8 +182,19 @@ class ValidatorConfig(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     
+    # Validator run mode: "gpu" (default, full behaviour) or "cpu" (weights/burn only)
+    mode: str = Field(default="gpu", description="Run mode: gpu (full) or cpu (weights only)")
+    
     # Runtime fields (set after loading configs from API)
     task_config: Optional[TaskConfig] = None
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: str) -> str:
+        valid_modes = ["cpu", "gpu"]
+        if v not in valid_modes:
+            raise ValueError(f"mode must be one of {valid_modes}")
+        return v
     
     @property
     def api_key(self) -> str:

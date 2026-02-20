@@ -31,7 +31,7 @@ nepher-miner submit --path ./my-agent --config config/miner_config.yaml
 
 → Full guide: [docs/miner-guide.md](docs/miner-guide.md)
 
-### Validators
+### Validators (GPU)
 
 Requires NVIDIA GPU (A100+ recommended), Isaac Sim 5.1, Isaac Lab 2.3.0, Docker + NVIDIA Container Toolkit.
 
@@ -45,6 +45,32 @@ cp config/validator_config.example.yaml config/validator_config.yaml
 docker compose build validator
 docker compose up -d validator
 ```
+
+→ Full guide: [docs/validator-guide.md](docs/validator-guide.md)
+
+### Validators (CPU — No GPU Required)
+
+A lightweight alternative (`~200 MB` image, no Isaac Sim, no NVIDIA drivers) that handles **weight-setting and burning only**. Use this on a cheap VPS to keep your validator online 24/7 while reserving the GPU machine solely for evaluation windows.
+
+```bash
+git clone https://github.com/nepher-ai/nepher-subnet.git && cd nepher-subnet
+
+cp config/docker.env.example .env
+cp config/validator_config.example.yaml config/validator_config.yaml
+# Edit: set wallet + API key
+
+docker compose build validator-cpu
+docker compose up -d validator-cpu
+```
+
+Or without Docker:
+
+```bash
+pip install -e .
+nepher-validator run --config config/validator_config.yaml --mode cpu
+```
+
+> **CPU/GPU split deployment:** run `validator-cpu` on a cheap VPS for 24/7 weight-setting and burn, and only spin up the full GPU validator during evaluation. See the [validator guide](docs/validator-guide.md#8-cpugpu-split-deployment).
 
 → Full guide: [docs/validator-guide.md](docs/validator-guide.md)
 
@@ -79,8 +105,14 @@ Two-layer config — the loader merges both automatically (user values override 
 nepher-miner submit   --path ./agent --config config/miner_config.yaml
 nepher-miner validate --path ./agent
 
-# Validator
+# Validator — GPU (default, full evaluation + weight-setting)
 nepher-validator run --config config/validator_config.yaml [--verbose] [--json-logs]
+
+# Validator — CPU (weight-setting & burn only, no GPU needed)
+nepher-validator run --config config/validator_config.yaml --mode cpu
+
+# Validator — CPU via Docker (recommended for 24/7 VPS deployment)
+docker compose build validator-cpu && docker compose up -d validator-cpu
 ```
 
 ## Development

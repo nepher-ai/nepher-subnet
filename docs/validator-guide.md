@@ -1,10 +1,21 @@
 # Nepher Validator Guide
 
-Set up and run a **Nepher Subnet 49 validator** on a GPU machine (RunPod, Vast.ai, Lambda, etc.).
+Set up and run a **Nepher Subnet 49 validator**.
+
+The validator supports two deployment modes:
+
+| Mode | What it does | Hardware |
+|---|---|---|
+| **GPU** (default) | Full lifecycle — evaluation, set-weights, burn | GPU machine (A100+ recommended) |
+| **CPU** | Set-weights & hourly burn only — no evaluation | Any cheap CPU VPS ($5–10/month) |
+
+A single GPU machine with the default mode handles everything. For cost savings you can split the workload across two machines — see [Section 8](#8-cpugpu-split-deployment).
 
 ---
 
 ## 1. Requirements
+
+### GPU Validator (default)
 
 | Spec | Minimum | Recommended |
 |---|---|---|
@@ -15,6 +26,17 @@ Set up and run a **Nepher Subnet 49 validator** on a GPU machine (RunPod, Vast.a
 | **NVIDIA Driver / CUDA** | 535+ / 12.1+ | Latest stable / 12.1+ |
 
 **Software:** Isaac Sim 5.1, Isaac Lab 2.3.0, Python 3.10+, Docker + Compose, Git
+
+### CPU Validator (optional split)
+
+| Spec | Minimum |
+|---|---|
+| **CPU** | 2 vCPU |
+| **RAM** | 4 GB |
+| **Disk** | 20 GB |
+| **OS** | Ubuntu 22.04 LTS |
+
+**Software:** Python 3.10+, Docker + Compose (or native install), Git. No GPU, no Isaac Sim required.
 
 > Most GPU cloud providers ship drivers and Docker pre-installed — skip to [Step 3](#3-bittensor-wallet) if so.
 
@@ -64,6 +86,8 @@ sudo apt install -y docker-compose-plugin
 
 ## 3. Bittensor Wallet
 
+> **Prerequisite:** Install the Bittensor CLI (`btcli`) if you haven't already — see the [Bittensor docs](https://docs.bittensor.com/).
+
 Register and stake on Subnet 49:
 
 ```bash
@@ -77,8 +101,7 @@ Wallet files: `~/.bittensor/wallets/validator/`
 
 ## 4. Get Your Nepher API Key
 
-1. Sign in at **https://account.nepher.ai**
-2. **API Keys** → copy your API key
+Sign in at **https://account.nepher.ai** → **API Keys** → copy your key.
 
 ---
 
@@ -92,13 +115,13 @@ cp config/docker.env.example .env
 cp config/validator_config.example.yaml config/validator_config.yaml
 ```
 
-Set your API key in `.env`:
+Edit **`.env`** (used by Docker Compose to inject environment variables):
 
 ```bash
 NEPHER_API_KEY=nepher_your_actual_api_key_here
 ```
 
-Set wallet details in `config/validator_config.yaml`:
+Edit **`config/validator_config.yaml`** (used by the validator process at runtime):
 
 ```yaml
 tournament:
@@ -108,10 +131,10 @@ wallet:
   hotkey: "default"
 ```
 
-> Shared settings live in `config/common_config.yaml` (ships with repo) and are merged automatically.
+> **Why both?** `.env` passes the key into the container environment; `validator_config.yaml` is read by the validator itself. Keep them in sync. Shared settings live in `config/common_config.yaml` (ships with repo) and are merged automatically.
 
 ```bash
-# Build & run
+# Build & run (GPU validator — default mode)
 docker compose build validator          # First build: 30–60 min (Isaac Sim ~20 GB)
 docker compose up -d validator
 docker compose logs -f validator
@@ -122,6 +145,8 @@ docker compose restart validator        # Restart
 docker compose up -d --build validator  # Rebuild after updates
 docker compose exec validator bash      # Shell into container
 ```
+
+> **CPU-only mode (Docker):** `docker compose up -d validator-cpu` — see [Section 8](#8-cpugpu-split-deployment).
 
 ---
 
@@ -158,10 +183,11 @@ ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e ./eval-nav
 cp config/validator_config.example.yaml config/validator_config.yaml
 nano config/validator_config.yaml  # Set API key + wallet
 
-# Any of these work:
-./scripts/start_validator.sh --config config/validator_config.yaml
+# GPU validator (default — full behaviour):
 nepher-validator run --config config/validator_config.yaml
-python -m validator run --config config/validator_config.yaml
+
+# CPU validator (weights & burn only — no GPU needed):
+nepher-validator run --config config/validator_config.yaml --mode cpu
 ```
 
 <details><summary><b>Run as systemd service</b></summary>
@@ -175,7 +201,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+User=root  # adjust to a dedicated service user if preferred
 WorkingDirectory=/root/nepher-subnet
 Environment="ISAACLAB_PATH=/path/to/isaac-lab"
 Environment="ISAACSIM_PATH=/path/to/isaac-sim"
@@ -199,12 +225,55 @@ journalctl -u nepher-validator -f
 ## 7. Health Check
 
 ```bash
-python scripts/health_check.py   # All 7 checks should show ✅
+python scripts/health_check.py   # All checks should show ✅
 ```
+
+The script verifies: GPU availability, Isaac Sim/Lab paths, API key validity, wallet presence, subnet registration, chain connectivity, and Docker runtime (if applicable). If a specific check fails, refer to [Troubleshooting](#9-troubleshooting).
 
 ---
 
-## 8. Troubleshooting
+## 8. CPU/GPU Split Deployment
+
+Split the workload across two machines so the expensive GPU is only rented during evaluation periods.
+
+| Machine | Flag | Runs 24/7? | Responsibility |
+|---|---|---|---|
+| **CPU VPS** | `--mode cpu` | Yes | Set-weights during reward; burn on UID 0 every hour during all other periods |
+| **GPU instance** | `--mode gpu` (default) | Only during evaluation | Setup + evaluation + score submission |
+
+Both use the **same wallet, hotkey, and config**. Each independently polls the tournament API — no coordination channel needed.
+
+### Docker
+
+```bash
+# On the CPU VPS:
+docker compose up -d validator-cpu
+
+# On the GPU machine (only during evaluation):
+docker compose up -d validator
+```
+
+The `validator-cpu` service uses a lightweight image (`python:3.10-slim`, ~200 MB) — no Isaac Sim, no NVIDIA drivers. It builds in under a minute.
+
+### Native
+
+```bash
+# CPU machine:
+nepher-validator run --config config/validator_config.yaml --mode cpu
+
+# GPU machine:
+nepher-validator run --config config/validator_config.yaml
+```
+
+### Tips
+
+- The GPU machine can be **stopped** after evaluation ends — the CPU validator handles all chain operations.
+- If both happen to run during the reward period, they set identical weights. The overlap is harmless.
+- You can also set `mode: cpu` in `validator_config.yaml` instead of passing the CLI flag every time.
+
+---
+
+## 9. Troubleshooting
 
 | Issue | Fix |
 |---|---|

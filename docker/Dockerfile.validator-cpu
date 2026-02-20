@@ -1,0 +1,40 @@
+# Nepher CPU Validator Dockerfile
+# Lightweight container for weight-setting and burning only — no GPU, no Isaac Sim.
+
+FROM python:3.10-slim
+
+# Set environment
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source code (only what the validator needs — no eval-nav, no nepher/envhub)
+COPY nepher_core/ ./nepher_core/
+COPY validator/ ./validator/
+COPY pyproject.toml .
+
+# Install package
+RUN pip install -e .
+
+# Create directories for bittensor runtime
+RUN mkdir -p /root/.bittensor/miners /root/.bittensor/wallets
+
+# Healthcheck — just verify the module imports
+HEALTHCHECK --interval=60s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import nepher_core; print('OK')" || exit 1
+
+ENTRYPOINT ["python", "-m", "validator"]
+CMD ["run", "--config", "/app/config/validator_config.yaml", "--mode", "cpu"]
+
