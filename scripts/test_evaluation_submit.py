@@ -443,7 +443,9 @@ def main() -> int:
         help="Directory to save downloaded agent zip (default: ./downloads)",
     )
 
-    args = parser.parse_args()
+    # Ignore empty/whitespace args (e.g. from line continuation or copy-paste)
+    argv = [a for a in sys.argv[1:] if a and not a.isspace()]
+    args = parser.parse_args(argv)
 
     has_action = (
         args.in_progress or args.submit or args.fetch_unevaluated
