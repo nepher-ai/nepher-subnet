@@ -2,64 +2,77 @@
 """
 Test script for the two-phase evaluation flow.
 
-Supports: in-progress signaling, evaluation submission (verify → submit),
-fetching unevaluated agents, fetching winner, fetching active eval config,
-and fetching leaderboard data.
+Supports all validator-facing endpoints: in-progress signaling, evaluation
+submission (verify → submit), fetching unevaluated agents, downloading agents,
+fetching the active tournament & eval config, leaderboard, and winner hotkey.
 
-The backend now derives the evaluation *phase* ("public" or "private") from
-the current timestamp.  During the quiet zone (between public eval cutoff
-and private eval start) all submission endpoints return 409 Conflict.
+The backend derives the evaluation *phase* ("public" or "private") from the
+current timestamp.  During the quiet zone (between public eval cutoff and
+private eval start) all submission endpoints return 409 Conflict.
+
+Use --phase public|private with --fetch-unevaluated and --fetch-leaderboard
+to scope results to a single phase.  Without it, --fetch-unevaluated returns
+agents not yet evaluated in *any* phase, and --fetch-leaderboard auto-detects
+the best phase for display.
 
 Usage:
+  # ── Evaluation flow ──────────────────────────────────────────
+
   # In-progress only
   python scripts/test_evaluation_submit.py \\
-    --tournament-id <UUID> --agent-id <UUID> \\
-    --in-progress --api-key <KEY> --wallet-name X --wallet-hotkey Y
+    -t <UUID> -a <UUID> --in-progress \\
+    --api-key <KEY> --wallet-name X --wallet-hotkey Y
 
   # Submit result only
   python scripts/test_evaluation_submit.py \\
-    --tournament-id <UUID> --agent-id <UUID> \\
-    --submit --score 0.85 --api-key <KEY> --wallet-name X --wallet-hotkey Y
+    -t <UUID> -a <UUID> --submit --score 0.85 \\
+    --api-key <KEY> --wallet-name X --wallet-hotkey Y
 
-  # Both: in-progress then submit (full test flow)
+  # Full flow: in-progress → submit
   python scripts/test_evaluation_submit.py \\
-    --tournament-id <UUID> --agent-id <UUID> \\
-    --in-progress --submit --score 0.9 \\
-    --api-key <KEY> --wallet-name X --wallet-hotkey Y --server-url http://localhost:8003
+    -t <UUID> -a <UUID> --in-progress --submit --score 0.9 \\
+    --api-key <KEY> --wallet-name X --wallet-hotkey Y
 
   # Clear in-progress (omit --agent-id)
   python scripts/test_evaluation_submit.py \\
-    --tournament-id <UUID> --in-progress --api-key <KEY> --wallet-name X --wallet-hotkey Y
+    -t <UUID> --in-progress --api-key <KEY> --wallet-name X --wallet-hotkey Y
 
-  # Fetch unevaluated agents for a validator
-  python scripts/test_evaluation_submit.py \\
-    --tournament-id <UUID> --fetch-unevaluated \\
-    --api-key <KEY> --validator-hotkey-ss58 <SS58_ADDRESS>
+  # ── Queries (read-only) ─────────────────────────────────────
 
-  # Fetch winner hotkey (public, no API key needed)
+  # Fetch unevaluated agents (all phases)
   python scripts/test_evaluation_submit.py \\
-    --tournament-id <UUID> --fetch-winner --server-url http://localhost:8003
+    -t <UUID> --fetch-unevaluated \\
+    --api-key <KEY> --validator-hotkey-ss58 <SS58>
 
-  # Fetch the active eval config (public during contest, private during evaluation)
+  # Fetch unevaluated agents for a specific phase
   python scripts/test_evaluation_submit.py \\
-    --tournament-id <UUID> --fetch-active-config --server-url http://localhost:8003
+    -t <UUID> --fetch-unevaluated --phase private \\
+    --api-key <KEY> --validator-hotkey-ss58 <SS58>
 
-  # Fetch leaderboard (auto-detects phase, or pass --phase public|private)
+  # Fetch leaderboard (auto-detect or explicit phase)
   python scripts/test_evaluation_submit.py \\
-    --tournament-id <UUID> --fetch-leaderboard --phase public --server-url http://localhost:8003
+    -t <UUID> --fetch-leaderboard --phase public
 
-  # Fetch active tournament details (no --tournament-id needed)
+  # Fetch winner hotkey (public, no auth needed)
   python scripts/test_evaluation_submit.py \\
-    --fetch-active-tournament --server-url http://localhost:8003
+    -t <UUID> --fetch-winner
 
-  # Fetch active tournament (subnet-optimized, minimal payload)
+  # Fetch active eval config (phase-appropriate YAML)
   python scripts/test_evaluation_submit.py \\
-    --fetch-active-tournament --subnet --server-url http://localhost:8003
+    -t <UUID> --fetch-active-config
 
-  # Download an agent zip (requires API key with validator/admin role)
+  # ── Tournament & agent ──────────────────────────────────────
+
+  # Fetch active tournament (full response, no --tournament-id needed)
+  python scripts/test_evaluation_submit.py --fetch-active-tournament
+
+  # Fetch active tournament (subnet-optimized minimal payload)
+  python scripts/test_evaluation_submit.py --fetch-active-tournament --subnet
+
+  # Download agent zip
   python scripts/test_evaluation_submit.py \\
-    --tournament-id <UUID> --agent-id <UUID> \\
-    --download-agent --api-key <KEY> --output-dir ./downloads
+    -t <UUID> -a <UUID> --download-agent \\
+    --api-key <KEY> --output-dir ./downloads
 """
 
 import argparse
