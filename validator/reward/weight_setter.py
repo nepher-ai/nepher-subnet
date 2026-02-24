@@ -81,13 +81,13 @@ class WeightSetter:
         self._metagraph = get_metagraph(subtensor, self.config.subnet.subnet_uid)
         return self._metagraph
 
-    WEIGHT_SET_INTERVAL = 3600  # Re-set weights every 1 hour
+    WEIGHT_SET_INTERVAL = 1800  # Re-set weights every 30 minutes
 
     async def burn(self) -> None:
         """
         Burn on UID 0 — set all weight to ``BURN_UID``.
         
-        Public helper used by the CPU validator for hourly burns
+        Public helper used by the CPU validator for periodic burns
         outside the reward period.
         """
         logger.info("Burning on UID 0")

@@ -54,7 +54,7 @@ class ValidatorOrchestrator:
     REVIEW_INTERVAL = 60  # 1 minute
     COMPLETED_INTERVAL = 300  # 5 minutes
     ERROR_INTERVAL = 60  # 1 minute
-    BURN_INTERVAL = 3600  # 1 hour — cadence for UID-0 burns in CPU mode
+    BURN_INTERVAL = 1800  # 30 minutes — cadence for UID-0 burns in CPU mode
 
     def __init__(self, config: ValidatorConfig):
         """
