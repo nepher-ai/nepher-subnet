@@ -35,7 +35,7 @@ def load_wallet(
         Loaded wallet instance
         
     Raises:
-        ValueError: If wallet or hotkey doesn't exist
+        ValueError: If hotkey doesn't exist
     """
     wallet = Wallet(
         name=name,
@@ -43,10 +43,7 @@ def load_wallet(
         path=path,
     )
     
-    # Verify wallet exists
-    if not wallet.coldkey_file.exists_on_device():
-        raise ValueError(f"Wallet '{name}' not found at {wallet.path}")
-    
+    # Verify hotkey exists (only hotkey is required for signing / set_weights)
     if not wallet.hotkey_file.exists_on_device():
         raise ValueError(f"Hotkey '{hotkey}' not found for wallet '{name}'")
     

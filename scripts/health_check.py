@@ -93,15 +93,11 @@ def check_wallet():
         
         wallet = Wallet(name=wallet_name, hotkey=hotkey_name)
         
-        if wallet.coldkey_file.exists_on_device():
-            if wallet.hotkey_file.exists_on_device():
-                print(f"✅ Found {wallet_name}/{hotkey_name}")
-                return True
-            else:
-                print(f"❌ Hotkey '{hotkey_name}' not found")
-                return False
+        if wallet.hotkey_file.exists_on_device():
+            print(f"✅ Found {wallet_name}/{hotkey_name}")
+            return True
         else:
-            print(f"❌ Wallet '{wallet_name}' not found")
+            print(f"❌ Hotkey '{hotkey_name}' not found")
             return False
     except Exception as e:
         print(f"❌ Error: {e}")
