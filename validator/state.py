@@ -22,6 +22,8 @@ class TournamentPeriod(Enum):
     
     NO_TOURNAMENT = "no_tournament"
     CONTEST = "contest"
+    PUBLIC_EVALUATION = "public_evaluation"
+    QUIET_ZONE = "quiet_zone"
     SUBMIT_WINDOW = "submit_window"
     EVALUATION = "evaluation"
     REVIEW = "review"
@@ -53,20 +55,37 @@ def get_current_period(
     if tournament.status in ["done", "cancelled"]:
         return TournamentPeriod.COMPLETED
     
+    # Guard: if essential timestamps are missing, treat as no-tournament.
+    # The backend may return a freshly-created tournament with null times.
+    if tournament.contest_start_time is None:
+        return TournamentPeriod.NO_TOURNAMENT
+    
     # Before contest starts
     if current_time < tournament.contest_start_time:
         return TournamentPeriod.NO_TOURNAMENT
     
-    # Contest period (before submit window)
-    if current_time < tournament.submit_window_start_time:
+    # Contest period — check for public evaluation first
+    if tournament.submit_window_start_time and current_time < tournament.submit_window_start_time:
+        if (
+            tournament.has_public_eval
+            and tournament.public_eval_end_time
+            and current_time < tournament.public_eval_end_time
+        ):
+            return TournamentPeriod.PUBLIC_EVALUATION
+        if (
+            tournament.has_public_eval
+            and tournament.public_eval_end_time
+            and current_time >= tournament.public_eval_end_time
+        ):
+            return TournamentPeriod.QUIET_ZONE
         return TournamentPeriod.CONTEST
     
     # Submit window (between submit_window_start and contest_end)
-    if current_time < tournament.contest_end_time:
+    if tournament.contest_end_time and current_time < tournament.contest_end_time:
         return TournamentPeriod.SUBMIT_WINDOW
     
     # Evaluation period
-    if current_time < tournament.evaluation_end_time:
+    if tournament.evaluation_end_time and current_time < tournament.evaluation_end_time:
         return TournamentPeriod.EVALUATION
     
     # Review period (between evaluation_end and reward_start)
@@ -74,7 +93,7 @@ def get_current_period(
         return TournamentPeriod.REVIEW
     
     # Reward period
-    if current_time < tournament.reward_end_time:
+    if tournament.reward_end_time and current_time < tournament.reward_end_time:
         return TournamentPeriod.REWARD
     
     # Completed
@@ -146,6 +165,8 @@ class ValidatorStateManager:
         """
         if old_period != new_period:
             logger.info(f"Period transition: {old_period.value} → {new_period.value}")
+            if new_period == TournamentPeriod.QUIET_ZONE:
+                logger.info("Entering quiet zone — stopping evaluations, preparing for private phase")
             self._last_period = new_period
 
     def reset(self) -> None:

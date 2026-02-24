@@ -20,9 +20,16 @@ class Tournament(BaseModel):
     contest_start_time: Optional[int] = None
     submit_window_start_time: Optional[int] = None
     contest_end_time: Optional[int] = None
+    evaluation_start_time: Optional[int] = None
     evaluation_end_time: Optional[int] = None
     reward_start_time: Optional[int] = None
     reward_end_time: Optional[int] = None
+
+    # Two-phase evaluation
+    has_public_eval: bool = False
+    current_eval_phase: Optional[str] = None  # "public", "private", "quiet_zone", None
+    public_eval_end_time: Optional[int] = None
+    public_eval_buffer_hours: Optional[int] = None
 
     # Optional fields
     description: Optional[str] = None
@@ -77,6 +84,7 @@ class Evaluation(BaseModel):
     tournament_id: Optional[str] = None
     validator_hotkey: Optional[str] = None
     status: Optional[str] = None  # in_progress, done, failed
+    phase: str = "private"  # "public" or "private"
     
     # Results
     score: Optional[float] = None
@@ -122,6 +130,8 @@ class EvaluationToken(BaseModel):
     upload_token: str
     tournament_id: str
     agent_id: str
+    phase: str = "private"
+    public_eval_end_time: Optional[int] = None
     expires_at: Optional[datetime] = None
     max_log_file_size: Optional[int] = None
     existing_status: Optional[str] = None

@@ -42,7 +42,8 @@ class ValidatorOrchestrator:
     5. Reset and wait for next tournament
     
     Supports two run modes controlled by ``config.mode``:
-    - **gpu** (default): full behaviour — setup, evaluation, reward, burn.
+    - **gpu** (default): full behaviour — setup, evaluation, reward, and
+      hourly burn when not in reward period (same as CPU).
     - **cpu**: lightweight — reward (set-weights) and hourly burn only;
       skips setup and evaluation entirely.
     """
@@ -53,7 +54,7 @@ class ValidatorOrchestrator:
     REVIEW_INTERVAL = 60  # 1 minute
     COMPLETED_INTERVAL = 300  # 5 minutes
     ERROR_INTERVAL = 60  # 1 minute
-    BURN_INTERVAL = 3600  # 1 hour — cadence for UID-0 burns in CPU mode
+    BURN_INTERVAL = 1800  # 30 minutes — cadence for UID-0 burns in CPU mode
 
     def __init__(self, config: ValidatorConfig):
         """
@@ -146,7 +147,12 @@ class ValidatorOrchestrator:
                     f"period={period.name}, status={tournament.status}"
                 )
                 
-                # 3. Handle state transitions
+                # 3. Detect period transitions
+                if self.state._last_period is not None and self.state._last_period != period:
+                    self.state.on_period_change(self.state._last_period, period)
+                self.state._last_period = period
+                
+                # 4. Handle state transitions
                 await self._handle_period(tournament, period)
                 
             except Exception as e:
@@ -186,30 +192,46 @@ class ValidatorOrchestrator:
                 await self._hourly_burn()
 
             # ── GPU-only handlers (full behaviour) ───────────────────
+            # When not in reward, GPU also burns on UID 0 hourly (same as CPU).
             case TournamentPeriod.CONTEST:
-                logger.debug("Contest period - waiting...")
-                await asyncio.sleep(self.CONTEST_INTERVAL)
-                
-            case TournamentPeriod.SUBMIT_WINDOW:
-                logger.debug("Submit window - waiting for evaluation period...")
-                await asyncio.sleep(self.CONTEST_INTERVAL)
-                    
-            case TournamentPeriod.EVALUATION:
-                # Run setup if not complete
+                logger.debug("Contest period - burning then waiting...")
+                await self._hourly_burn()
+
+            case TournamentPeriod.PUBLIC_EVALUATION:
                 if not self.state.is_setup_complete:
                     await self._run_setup(tournament)
-                
-                # Run evaluation loop
-                await self._run_evaluation(tournament)
+                await self._run_evaluation(tournament, phase="public")
+
+            case TournamentPeriod.QUIET_ZONE:
+                eval_start = tournament.evaluation_start_time
+                logger.info(
+                    "Quiet zone — resetting setup for private phase. "
+                    f"Private evaluation starts at {eval_start or 'unknown'}"
+                )
+                if self._evaluation_orchestrator:
+                    self._evaluation_orchestrator.reset_stats()
+                if self._setup_manager:
+                    self._setup_manager.reset()
+                self.state.reset()
+                await self._hourly_burn()
+
+            case TournamentPeriod.SUBMIT_WINDOW:
+                logger.debug("Submit window - burning then waiting...")
+                await self._hourly_burn()
+                    
+            case TournamentPeriod.EVALUATION:
+                if not self.state.is_setup_complete:
+                    await self._run_setup(tournament)
+                await self._run_evaluation(tournament, phase="private")
                 
             case TournamentPeriod.REVIEW:
-                logger.info("Review period - waiting for admin approval...")
-                await asyncio.sleep(self.REVIEW_INTERVAL)
-                
+                logger.info("Review period - burning then waiting...")
+                await self._hourly_burn()
+
             case TournamentPeriod.COMPLETED:
                 logger.info("Tournament completed")
                 self.state.reset()
-                await asyncio.sleep(self.COMPLETED_INTERVAL)
+                await self._hourly_burn()
 
     async def _run_setup(self, tournament: Tournament) -> None:
         """Run setup phase."""
@@ -230,8 +252,8 @@ class ValidatorOrchestrator:
             logger.error(f"Setup failed: {e}")
             raise
 
-    async def _run_evaluation(self, tournament: Tournament) -> None:
-        """Run evaluation loop."""
+    async def _run_evaluation(self, tournament: Tournament, phase: str = "private") -> None:
+        """Run evaluation loop for the given phase."""
         if self._evaluation_orchestrator is None:
             self._evaluation_orchestrator = EvaluationOrchestrator(
                 config=self.config,
@@ -239,14 +261,20 @@ class ValidatorOrchestrator:
                 validator_hotkey=self.validator_hotkey,
             )
         
-        async def is_evaluation_period() -> bool:
-            """Re-fetch tournament each check so schedule changes are detected."""
-            fresh = await self.api.get_active_tournament()
-            return get_current_period(fresh) == TournamentPeriod.EVALUATION
+        expected_period = (
+            TournamentPeriod.PUBLIC_EVALUATION if phase == "public"
+            else TournamentPeriod.EVALUATION
+        )
         
+        async def is_evaluation_period() -> bool:
+            fresh = await self.api.get_active_tournament()
+            return get_current_period(fresh) == expected_period
+        
+        logger.info(f"Starting {phase} evaluation loop")
         await self._evaluation_orchestrator.run_evaluation_loop(
             tournament=tournament,
             is_evaluation_period_fn=is_evaluation_period,
+            phase=phase,
         )
 
     async def _hourly_burn(self) -> None:

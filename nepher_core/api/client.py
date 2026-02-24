@@ -31,6 +31,7 @@ from nepher_core.api.exceptions import (
     APIError,
     AuthenticationError,
     NotFoundError,
+    QuietZoneError,
     ValidationError,
     RateLimitError,
 )
@@ -154,6 +155,8 @@ class TournamentAPI:
             raise NotFoundError(message, status_code=status, response_body=raw_body)
         elif status == 400 or status == 422:
             raise ValidationError(message, status_code=status, response_body=raw_body)
+        elif status == 409:
+            raise QuietZoneError(message, status_code=status, response_body=raw_body)
         elif status == 429:
             retry_after = response.headers.get("Retry-After")
             raise RateLimitError(
@@ -317,6 +320,32 @@ class TournamentAPI:
             return yaml.safe_load(response.text)
         return response.json()
 
+    async def get_active_eval_config(self, tournament_id: str) -> tuple[str, dict[str, Any]]:
+        """
+        Download the phase-appropriate eval config.
+
+        During public evaluation the backend serves public_eval_config_yaml;
+        during quiet zone / private evaluation it serves eval_config_yaml.
+
+        Args:
+            tournament_id: Tournament ID
+
+        Returns:
+            (phase, config_dict) where phase comes from the X-Eval-Phase header.
+
+        Endpoint: GET /api/v1/tournaments/{id}/config/active_eval_config
+        """
+        response = await self._request(
+            "GET",
+            f"/api/v1/tournaments/{tournament_id}/config/active_eval_config",
+            expect_json=False,
+        )
+        phase = response.headers.get("x-eval-phase", "private")
+        content_type = response.headers.get("content-type", "")
+        if "yaml" in content_type or "x-yaml" in content_type:
+            return phase, yaml.safe_load(response.text)
+        return phase, response.json()
+
     async def get_winner_hotkey(self, tournament_id: str) -> WinnerInfo:
         """
         Get winner information for reward.
@@ -433,6 +462,7 @@ class TournamentAPI:
         validator_hotkey: str,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        phase: Optional[str] = None,
     ) -> AgentListResponse:
         """
         Get agents not yet evaluated by this validator.
@@ -442,6 +472,8 @@ class TournamentAPI:
             validator_hotkey: Validator's hotkey
             limit: Pagination limit
             offset: Pagination offset
+            phase: Evaluation phase ('public' or 'private'). When set, only
+                   evaluations in that phase count as completed.
             
         Returns:
             List of unevaluated agents
@@ -456,6 +488,8 @@ class TournamentAPI:
             params["limit"] = limit
         if offset is not None:
             params["offset"] = offset
+        if phase is not None:
+            params["phase"] = phase
 
         response = await self._request(
             "GET",
