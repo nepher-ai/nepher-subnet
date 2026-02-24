@@ -264,6 +264,7 @@ class ValidatorOrchestrator:
         await self._evaluation_orchestrator.run_evaluation_loop(
             tournament=tournament,
             is_evaluation_period_fn=is_evaluation_period,
+            phase=phase,
         )
 
     async def _hourly_burn(self) -> None:

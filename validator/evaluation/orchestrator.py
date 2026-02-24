@@ -66,6 +66,7 @@ class EvaluationOrchestrator:
         self,
         tournament: Tournament,
         is_evaluation_period_fn,
+        phase: str = "private",
     ) -> None:
         """
         Run the main evaluation loop.
@@ -75,29 +76,30 @@ class EvaluationOrchestrator:
         Args:
             tournament: Current tournament
             is_evaluation_period_fn: Function that returns True if in evaluation period
+            phase: Evaluation phase ('public' or 'private')
         """
         logger.info("=" * 60)
-        logger.info("Starting evaluation loop")
+        logger.info(f"Starting {phase} evaluation loop")
         logger.info("=" * 60)
         
         while await is_evaluation_period_fn():
             try:
-                await self._process_pending_agents(tournament)
+                await self._process_pending_agents(tournament, phase=phase)
             except Exception as e:
                 logger.error(f"Error in evaluation loop: {e}")
                 await asyncio.sleep(self.POLL_INTERVAL)
         
         logger.info("=" * 60)
-        logger.info(f"Evaluation loop complete. Stats: {self.stats}")
+        logger.info(f"Evaluation loop ({phase}) complete. Stats: {self.stats}")
         logger.info("=" * 60)
 
-    async def _process_pending_agents(self, tournament: Tournament) -> None:
+    async def _process_pending_agents(self, tournament: Tournament, phase: str = "private") -> None:
         """Process all pending agents."""
-        # Fetch pending agents
-        logger.info("Checking for pending agents...")
+        logger.info(f"Checking for pending agents (phase={phase})...")
         response = await self.api.get_pending_agents(
             tournament_id=tournament.id,
             validator_hotkey=self.validator_hotkey,
+            phase=phase,
         )
         
         agents = response.agents

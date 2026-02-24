@@ -256,6 +256,7 @@ def fetch_unevaluated_agents(
     api_key: str,
     tournament_id: str,
     validator_hotkey: str,
+    phase: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
 ) -> dict:
@@ -265,6 +266,8 @@ def fetch_unevaluated_agents(
             "tournament_id": tournament_id,
             "validator_hotkey": validator_hotkey,
         }
+        if phase is not None:
+            params["phase"] = phase
         if limit is not None:
             params["limit"] = limit
         if offset is not None:
@@ -414,7 +417,7 @@ def main() -> int:
     extra.add_argument(
         "--phase",
         choices=["public", "private"],
-        help="Phase filter for --fetch-leaderboard (auto-detected if omitted)",
+        help="Phase filter for --fetch-leaderboard and --fetch-unevaluated",
     )
     extra.add_argument(
         "--subnet",
@@ -619,8 +622,9 @@ def main() -> int:
 
     # ── Fetch unevaluated agents ─────────────────────────────────
     if args.fetch_unevaluated:
+        phase_label = f" (phase={args.phase})" if args.phase else ""
         print("=" * 50)
-        print("UNEVALUATED AGENTS")
+        print(f"UNEVALUATED AGENTS{phase_label}")
         print("=" * 50)
         try:
             result = fetch_unevaluated_agents(
@@ -628,6 +632,7 @@ def main() -> int:
                 args.api_key,
                 tournament_id,
                 hotkey_ss58,
+                phase=args.phase,
             )
             agents = result.get("agents", [])
             total = result.get("total", 0)

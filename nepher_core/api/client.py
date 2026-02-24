@@ -433,6 +433,7 @@ class TournamentAPI:
         validator_hotkey: str,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        phase: Optional[str] = None,
     ) -> AgentListResponse:
         """
         Get agents not yet evaluated by this validator.
@@ -442,6 +443,8 @@ class TournamentAPI:
             validator_hotkey: Validator's hotkey
             limit: Pagination limit
             offset: Pagination offset
+            phase: Evaluation phase ('public' or 'private'). When set, only
+                   evaluations in that phase count as completed.
             
         Returns:
             List of unevaluated agents
@@ -456,6 +459,8 @@ class TournamentAPI:
             params["limit"] = limit
         if offset is not None:
             params["offset"] = offset
+        if phase is not None:
+            params["phase"] = phase
 
         response = await self._request(
             "GET",
