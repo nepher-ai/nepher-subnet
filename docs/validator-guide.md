@@ -238,8 +238,8 @@ Split the workload across two machines so the expensive GPU is only rented durin
 
 | Machine | Flag | Runs 24/7? | Responsibility |
 |---|---|---|---|
-| **CPU VPS** | `--mode cpu` | Yes | Set-weights during reward; burn on UID 0 every hour during all other periods |
-| **GPU instance** | `--mode gpu` (default) | Only during evaluation | Setup + evaluation + score submission |
+| **CPU VPS** | `--mode cpu` | Yes | Set-weights during reward; burn on UID 0 every hour when not in reward |
+| **GPU instance** | `--mode gpu` (default) | Only during evaluation | Setup + evaluation + score submission; set-weights during reward; burn every hour when not in reward |
 
 Both use the **same wallet, hotkey, and config**. Each independently polls the tournament API — no coordination channel needed.
 
