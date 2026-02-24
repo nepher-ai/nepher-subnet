@@ -146,7 +146,12 @@ class ValidatorOrchestrator:
                     f"period={period.name}, status={tournament.status}"
                 )
                 
-                # 3. Handle state transitions
+                # 3. Detect period transitions
+                if self.state._last_period is not None and self.state._last_period != period:
+                    self.state.on_period_change(self.state._last_period, period)
+                self.state._last_period = period
+                
+                # 4. Handle state transitions
                 await self._handle_period(tournament, period)
                 
             except Exception as e:
@@ -196,10 +201,13 @@ class ValidatorOrchestrator:
                 await self._run_evaluation(tournament, phase="public")
 
             case TournamentPeriod.QUIET_ZONE:
+                eval_start = tournament.evaluation_start_time
                 logger.info(
-                    "Quiet zone — downloading private config, clearing public artifacts. "
-                    f"Private evaluation starts at {tournament.evaluation_start_time}"
+                    "Quiet zone — resetting setup for private phase. "
+                    f"Private evaluation starts at {eval_start or 'unknown'}"
                 )
+                if self._evaluation_orchestrator:
+                    self._evaluation_orchestrator.reset_stats()
                 if self._setup_manager:
                     self._setup_manager.reset()
                 self.state.reset()

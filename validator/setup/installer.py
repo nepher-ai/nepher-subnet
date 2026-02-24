@@ -318,7 +318,11 @@ class SetupManager:
         logger.info("=" * 60)
 
     async def _download_configs(self, tournament_id: str) -> None:
-        """Download and save tournament configurations."""
+        """Download and save tournament configurations.
+
+        Uses the phase-aware active_eval_config endpoint so that the correct
+        config (public or private) is served based on the current period.
+        """
         workspace = self.config.paths.workspace
         
         # Download subnet config
@@ -327,11 +331,12 @@ class SetupManager:
         subnet_config_path = workspace / "subnet_config.yaml"
         save_yaml(subnet_config, subnet_config_path)
         
-        # Download task config
-        logger.info("  Downloading task configuration...")
-        task_config = await self.api.get_task_config(tournament_id)
+        # Download phase-appropriate task/eval config
+        logger.info("  Downloading task configuration (phase-aware)...")
+        phase, task_config = await self.api.get_active_eval_config(tournament_id)
         task_config_path = workspace / "task_config.yaml"
         save_yaml(task_config, task_config_path)
+        logger.info(f"  Config phase: {phase}")
         
         # Store task config for later use
         self._task_config = task_config

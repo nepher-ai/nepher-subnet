@@ -13,6 +13,7 @@ from nepher_core.api.exceptions import (
     APIError,
     AuthenticationError,
     NotFoundError,
+    QuietZoneError,
     ValidationError,
     RateLimitError,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "APIError",
     "AuthenticationError",
     "NotFoundError",
+    "QuietZoneError",
     "ValidationError",
     "RateLimitError",
 ]

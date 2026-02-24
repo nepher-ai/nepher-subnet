@@ -54,3 +54,9 @@ class RateLimitError(APIError):
         super().__init__(message, **kwargs)
         self.retry_after = retry_after
 
+
+class QuietZoneError(APIError):
+    """Raised when a submission is rejected because the tournament is in the quiet zone (409)."""
+
+    pass
+

@@ -8,7 +8,7 @@ during the evaluation period.
 import asyncio
 from typing import Optional
 
-from nepher_core.api import TournamentAPI, Tournament
+from nepher_core.api import TournamentAPI, Tournament, QuietZoneError
 from nepher_core.config import ValidatorConfig
 from nepher_core.utils.logging import get_logger
 from validator.evaluation.agent_evaluator import AgentEvaluator, EvaluationError
@@ -85,6 +85,9 @@ class EvaluationOrchestrator:
         while await is_evaluation_period_fn():
             try:
                 await self._process_pending_agents(tournament, phase=phase)
+            except QuietZoneError:
+                logger.info("Quiet zone reached — stopping evaluation loop")
+                break
             except Exception as e:
                 logger.error(f"Error in evaluation loop: {e}")
                 await asyncio.sleep(self.POLL_INTERVAL)
@@ -120,11 +123,13 @@ class EvaluationOrchestrator:
                 )
                 self._evaluated_count += 1
                 
+            except QuietZoneError:
+                raise
+                
             except EvaluationError as e:
                 logger.error(f"Evaluation failed for agent {agent.id}: {e.message}")
                 self._failed_count += 1
                 
-                # Submit failed evaluation
                 try:
                     await self.api.submit_failed_evaluation(
                         tournament_id=tournament.id,
@@ -132,6 +137,8 @@ class EvaluationOrchestrator:
                         validator_hotkey=self.validator_hotkey,
                         error_reason=e.message,
                     )
+                except QuietZoneError:
+                    raise
                 except Exception as submit_error:
                     logger.error(f"Failed to submit failure: {submit_error}")
                     
@@ -139,7 +146,6 @@ class EvaluationOrchestrator:
                 logger.error(f"Unexpected error evaluating agent {agent.id}: {e}")
                 self._failed_count += 1
             
-            # Small delay between agents
             await asyncio.sleep(self.AGENT_DELAY)
 
     def reset_stats(self) -> None:
