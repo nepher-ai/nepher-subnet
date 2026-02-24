@@ -22,6 +22,8 @@ class TournamentPeriod(Enum):
     
     NO_TOURNAMENT = "no_tournament"
     CONTEST = "contest"
+    PUBLIC_EVALUATION = "public_evaluation"
+    QUIET_ZONE = "quiet_zone"
     SUBMIT_WINDOW = "submit_window"
     EVALUATION = "evaluation"
     REVIEW = "review"
@@ -57,8 +59,20 @@ def get_current_period(
     if current_time < tournament.contest_start_time:
         return TournamentPeriod.NO_TOURNAMENT
     
-    # Contest period (before submit window)
+    # Contest period — check for public evaluation first
     if current_time < tournament.submit_window_start_time:
+        if (
+            tournament.has_public_eval
+            and tournament.public_eval_end_time
+            and current_time < tournament.public_eval_end_time
+        ):
+            return TournamentPeriod.PUBLIC_EVALUATION
+        if (
+            tournament.has_public_eval
+            and tournament.public_eval_end_time
+            and current_time >= tournament.public_eval_end_time
+        ):
+            return TournamentPeriod.QUIET_ZONE
         return TournamentPeriod.CONTEST
     
     # Submit window (between submit_window_start and contest_end)
@@ -146,6 +160,8 @@ class ValidatorStateManager:
         """
         if old_period != new_period:
             logger.info(f"Period transition: {old_period.value} → {new_period.value}")
+            if new_period == TournamentPeriod.QUIET_ZONE:
+                logger.info("Entering quiet zone — stopping evaluations, preparing for private phase")
             self._last_period = new_period
 
     def reset(self) -> None:

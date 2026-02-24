@@ -189,18 +189,30 @@ class ValidatorOrchestrator:
             case TournamentPeriod.CONTEST:
                 logger.debug("Contest period - waiting...")
                 await asyncio.sleep(self.CONTEST_INTERVAL)
+
+            case TournamentPeriod.PUBLIC_EVALUATION:
+                if not self.state.is_setup_complete:
+                    await self._run_setup(tournament)
+                await self._run_evaluation(tournament, phase="public")
+
+            case TournamentPeriod.QUIET_ZONE:
+                logger.info(
+                    "Quiet zone — downloading private config, clearing public artifacts. "
+                    f"Private evaluation starts at {tournament.evaluation_start_time}"
+                )
+                if self._setup_manager:
+                    self._setup_manager.reset()
+                self.state.reset()
+                await asyncio.sleep(self.CONTEST_INTERVAL)
                 
             case TournamentPeriod.SUBMIT_WINDOW:
                 logger.debug("Submit window - waiting for evaluation period...")
                 await asyncio.sleep(self.CONTEST_INTERVAL)
                     
             case TournamentPeriod.EVALUATION:
-                # Run setup if not complete
                 if not self.state.is_setup_complete:
                     await self._run_setup(tournament)
-                
-                # Run evaluation loop
-                await self._run_evaluation(tournament)
+                await self._run_evaluation(tournament, phase="private")
                 
             case TournamentPeriod.REVIEW:
                 logger.info("Review period - waiting for admin approval...")
@@ -230,8 +242,8 @@ class ValidatorOrchestrator:
             logger.error(f"Setup failed: {e}")
             raise
 
-    async def _run_evaluation(self, tournament: Tournament) -> None:
-        """Run evaluation loop."""
+    async def _run_evaluation(self, tournament: Tournament, phase: str = "private") -> None:
+        """Run evaluation loop for the given phase."""
         if self._evaluation_orchestrator is None:
             self._evaluation_orchestrator = EvaluationOrchestrator(
                 config=self.config,
@@ -239,11 +251,16 @@ class ValidatorOrchestrator:
                 validator_hotkey=self.validator_hotkey,
             )
         
-        async def is_evaluation_period() -> bool:
-            """Re-fetch tournament each check so schedule changes are detected."""
-            fresh = await self.api.get_active_tournament()
-            return get_current_period(fresh) == TournamentPeriod.EVALUATION
+        expected_period = (
+            TournamentPeriod.PUBLIC_EVALUATION if phase == "public"
+            else TournamentPeriod.EVALUATION
+        )
         
+        async def is_evaluation_period() -> bool:
+            fresh = await self.api.get_active_tournament()
+            return get_current_period(fresh) == expected_period
+        
+        logger.info(f"Starting {phase} evaluation loop")
         await self._evaluation_orchestrator.run_evaluation_loop(
             tournament=tournament,
             is_evaluation_period_fn=is_evaluation_period,

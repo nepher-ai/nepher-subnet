@@ -187,6 +187,7 @@ class ValidatorConfig(BaseModel):
     
     # Runtime fields (set after loading configs from API)
     task_config: Optional[TaskConfig] = None
+    current_phase: Optional[str] = None  # Runtime: "public" or "private"
 
     @field_validator("mode")
     @classmethod
