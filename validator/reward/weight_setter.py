@@ -107,7 +107,7 @@ class WeightSetter:
             is_reward_period_fn: Function that returns True if in reward
         """
         logger.info("=" * 60)
-        logger.info("Starting reward phase")
+        logger.info("Starting reward phase (weight setting on chain)")
         logger.info("=" * 60)
         
         while await is_reward_period_fn():

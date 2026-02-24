@@ -6,7 +6,8 @@ during the evaluation period.
 """
 
 import asyncio
-from typing import Optional
+import time
+from typing import Optional, Callable, Awaitable
 
 from nepher_core.api import TournamentAPI, Tournament, QuietZoneError
 from nepher_core.config import ValidatorConfig
@@ -67,23 +68,38 @@ class EvaluationOrchestrator:
         tournament: Tournament,
         is_evaluation_period_fn,
         phase: str = "private",
+        burn_callback: Optional[Callable[[], Awaitable[None]]] = None,
+        burn_interval_sec: int = 1800,
     ) -> None:
         """
         Run the main evaluation loop.
         
         Continues until evaluation period ends.
+        If burn_callback is provided, calls it periodically (every burn_interval_sec)
+        so the validator burns on UID 0 during evaluation like in CPU mode.
         
         Args:
             tournament: Current tournament
             is_evaluation_period_fn: Function that returns True if in evaluation period
             phase: Evaluation phase ('public' or 'private')
+            burn_callback: Optional async callback to burn on UID 0 (e.g. weight_setter.burn)
+            burn_interval_sec: Seconds between burn calls (default 1800)
         """
         logger.info("=" * 60)
         logger.info(f"Starting {phase} evaluation loop")
         logger.info("=" * 60)
         
+        last_burn_time: float = 0.0  # 0 so first iteration can burn immediately if callback set
+        
         while await is_evaluation_period_fn():
             try:
+                # Periodic burn during evaluation (same cadence as CPU validator)
+                if burn_callback is not None:
+                    now = time.time()
+                    if last_burn_time == 0 or (now - last_burn_time) >= burn_interval_sec:
+                        await burn_callback()
+                        last_burn_time = time.time()
+                
                 await self._process_pending_agents(tournament, phase=phase)
             except QuietZoneError:
                 logger.info("Quiet zone reached — stopping evaluation loop")

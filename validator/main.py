@@ -146,7 +146,7 @@ class ValidatorOrchestrator:
                     f"[iter {iteration}] Tournament {tournament.id} — "
                     f"period={period.name}, status={tournament.status}"
                 )
-                
+    
                 # 3. Detect period transitions
                 if self.state._last_period is not None and self.state._last_period != period:
                     self.state.on_period_change(self.state._last_period, period)
@@ -253,13 +253,16 @@ class ValidatorOrchestrator:
             raise
 
     async def _run_evaluation(self, tournament: Tournament, phase: str = "private") -> None:
-        """Run evaluation loop for the given phase."""
+        """Run evaluation loop for the given phase. Burns on UID 0 periodically like CPU validator."""
         if self._evaluation_orchestrator is None:
             self._evaluation_orchestrator = EvaluationOrchestrator(
                 config=self.config,
                 api=self.api,
                 validator_hotkey=self.validator_hotkey,
             )
+        
+        if self._weight_setter is None:
+            self._weight_setter = WeightSetter(self.config, self.api)
         
         expected_period = (
             TournamentPeriod.PUBLIC_EVALUATION if phase == "public"
@@ -270,11 +273,13 @@ class ValidatorOrchestrator:
             fresh = await self.api.get_active_tournament()
             return get_current_period(fresh) == expected_period
         
-        logger.info(f"Starting {phase} evaluation loop")
+        logger.info(f"Starting {phase} evaluation loop (burn every {self.BURN_INTERVAL}s)")
         await self._evaluation_orchestrator.run_evaluation_loop(
             tournament=tournament,
             is_evaluation_period_fn=is_evaluation_period,
             phase=phase,
+            burn_callback=self._weight_setter.burn,
+            burn_interval_sec=self.BURN_INTERVAL,
         )
 
     async def _hourly_burn(self) -> None:
