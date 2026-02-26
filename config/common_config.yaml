@@ -37,6 +37,6 @@ retry:
   evaluation_timeout_seconds: 3600   # 1 hour per agent
 
   # Weight setting retries
-  weight_setting_max_attempts: 5
+  weight_setting_max_attempts: 20
   weight_setting_initial_delay: 5.0
 
