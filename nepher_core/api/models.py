@@ -112,6 +112,18 @@ class WinnerInfo(BaseModel):
         extra = "ignore"
 
 
+class PreliminaryLeaderInfo(BaseModel):
+    """Current leaderboard leader for pre-reward emission allocation."""
+
+    leader_hotkey: Optional[str] = None
+    leader_agent_id: Optional[str] = None
+    leader_score: Optional[float] = None
+    phase: str = "public"
+
+    class Config:
+        extra = "ignore"
+
+
 class UploadToken(BaseModel):
     """Upload token response from /agents/upload/verify."""
 
@@ -135,6 +147,17 @@ class EvaluationToken(BaseModel):
     expires_at: Optional[datetime] = None
     max_log_file_size: Optional[int] = None
     existing_status: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
+
+
+class WeightCommitInfo(BaseModel):
+    """Latest weight commit from the backend for dedup coordination."""
+
+    weight_hash: str
+    weight_data: dict[str, float]
+    committed_at: datetime
 
     class Config:
         extra = "ignore"

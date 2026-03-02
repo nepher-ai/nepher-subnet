@@ -8,6 +8,7 @@ from nepher_core.api.models import (
     EvaluationToken,
     WinnerInfo,
     AgentListResponse,
+    WeightCommitInfo,
 )
 from nepher_core.api.exceptions import (
     APIError,
@@ -26,6 +27,7 @@ __all__ = [
     "EvaluationToken",
     "WinnerInfo",
     "AgentListResponse",
+    "WeightCommitInfo",
     "APIError",
     "AuthenticationError",
     "NotFoundError",

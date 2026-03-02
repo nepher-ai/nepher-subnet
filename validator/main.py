@@ -189,13 +189,13 @@ class ValidatorOrchestrator:
 
             # ── CPU-only: burn on UID 0 once per hour ────────────────
             case _ if self.mode == "cpu":
-                await self._hourly_burn()
+                await self._hourly_burn(tournament)
 
             # ── GPU-only handlers (full behaviour) ───────────────────
             # When not in reward, GPU also burns on UID 0 hourly (same as CPU).
             case TournamentPeriod.CONTEST:
                 logger.debug("Contest period - burning then waiting...")
-                await self._hourly_burn()
+                await self._hourly_burn(tournament)
 
             case TournamentPeriod.PUBLIC_EVALUATION:
                 if not self.state.is_setup_complete:
@@ -213,11 +213,11 @@ class ValidatorOrchestrator:
                 if self._setup_manager:
                     self._setup_manager.reset()
                 self.state.reset()
-                await self._hourly_burn()
+                await self._hourly_burn(tournament)
 
             case TournamentPeriod.SUBMIT_WINDOW:
                 logger.debug("Submit window - burning then waiting...")
-                await self._hourly_burn()
+                await self._hourly_burn(tournament)
                     
             case TournamentPeriod.EVALUATION:
                 if not self.state.is_setup_complete:
@@ -226,12 +226,12 @@ class ValidatorOrchestrator:
                 
             case TournamentPeriod.REVIEW:
                 logger.info("Review period - burning then waiting...")
-                await self._hourly_burn()
+                await self._hourly_burn(tournament, phase="private")
 
             case TournamentPeriod.COMPLETED:
                 logger.info("Tournament completed")
                 self.state.reset()
-                await self._hourly_burn()
+                await self._hourly_burn(tournament)
 
     async def _run_setup(self, tournament: Tournament) -> None:
         """Run setup phase."""
@@ -278,22 +278,33 @@ class ValidatorOrchestrator:
             tournament=tournament,
             is_evaluation_period_fn=is_evaluation_period,
             phase=phase,
-            burn_callback=self._weight_setter.burn,
+            burn_callback=lambda: self._weight_setter.burn(tournament_id=tournament.id, phase=phase),
             burn_interval_sec=self.BURN_INTERVAL,
         )
 
-    async def _hourly_burn(self) -> None:
+    async def _hourly_burn(
+        self,
+        tournament: Optional[Tournament] = None,
+        phase: str = "public",
+    ) -> None:
         """
-        Burn on UID 0 once, then sleep for ~1 hour.
-        
-        Used by the CPU validator during non-reward tournament periods
-        to maintain chain presence without running evaluations.
+        Burn on UID 0 once (with optional 1% leader allocation), then sleep.
+
+        When *tournament* is provided the weight setter will attempt to
+        allocate 1% of emissions to the current leaderboard leader.
+
+        Args:
+            tournament: Current tournament (if any).
+            phase: Leaderboard phase to query for the leader.
         """
         if self._weight_setter is None:
             self._weight_setter = WeightSetter(self.config, self.api)
-        
-        await self._weight_setter.burn()
-        
+
+        await self._weight_setter.burn(
+            tournament_id=tournament.id if tournament else None,
+            phase=phase,
+        )
+
         logger.info(f"Burn complete. Next burn in ~{self.BURN_INTERVAL}s")
         await asyncio.sleep(self.BURN_INTERVAL)
 

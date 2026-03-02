@@ -24,8 +24,10 @@ from nepher_core.api.models import (
     Agent,
     AgentListResponse,
     WinnerInfo,
+    PreliminaryLeaderInfo,
     UploadToken,
     EvaluationToken,
+    WeightCommitInfo,
 )
 from nepher_core.api.exceptions import (
     APIError,
@@ -363,6 +365,35 @@ class TournamentAPI:
             f"/api/v1/tournaments/{tournament_id}/winner-hotkey",
         )
         return WinnerInfo(**response.json())
+
+    async def get_preliminary_leader(
+        self,
+        tournament_id: str,
+        phase: str = "public",
+    ) -> PreliminaryLeaderInfo:
+        """
+        Get the leaderboard leader for pre-reward emission allocation.
+
+        Args:
+            tournament_id: Tournament ID
+            phase: Leaderboard phase to query (``"public"`` during evaluation,
+                   ``"private"`` during review when final scores are available).
+
+        Returns an empty PreliminaryLeaderInfo (leader_hotkey=None) on any
+        error, mirroring the graceful fallback pattern of get_winner_hotkey.
+
+        Endpoint: GET /api/v1/tournaments/{id}/preliminary-leader?phase=...
+        """
+        try:
+            response = await self._request(
+                "GET",
+                f"/api/v1/tournaments/{tournament_id}/preliminary-leader",
+                params={"phase": phase},
+            )
+            return PreliminaryLeaderInfo(**response.json())
+        except Exception as e:
+            logger.warning(f"Failed to fetch preliminary leader: {e}")
+            return PreliminaryLeaderInfo()
 
     # =========================================================================
     # Agent Endpoints
@@ -837,4 +868,63 @@ class TournamentAPI:
             self._handle_error_response(response)
 
         logger.warning(f"Submitted failed evaluation: agent={agent_id}, reason={error_reason}")
+
+    # =========================================================================
+    # Weight Commit Endpoints (dedup coordination)
+    # =========================================================================
+
+    async def get_latest_weight_commit(
+        self,
+        validator_hotkey: str,
+        netuid: int,
+    ) -> Optional[WeightCommitInfo]:
+        """Fetch the most recent weight commit for dedup checks.
+
+        Returns None on 204/404/any error so that backend failures never
+        block on-chain weight setting.
+
+        Endpoint: GET /api/v1/weight-commits/latest
+        """
+        try:
+            response = await self._request(
+                "GET",
+                "/api/v1/weight-commits/latest",
+                params={"validator_hotkey": validator_hotkey, "netuid": netuid},
+            )
+            if response.status_code == 204:
+                return None
+            return WeightCommitInfo(**response.json())
+        except NotFoundError:
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to fetch latest weight commit: {e}")
+            return None
+
+    async def report_weight_commit(
+        self,
+        validator_hotkey: str,
+        netuid: int,
+        weight_hash: str,
+        weight_data: dict[str, float],
+    ) -> None:
+        """Record a successful on-chain weight set (fire-and-forget).
+
+        Logs a warning on failure but never raises, so the main weight-setting
+        flow is never disrupted.
+
+        Endpoint: POST /api/v1/weight-commits
+        """
+        try:
+            await self._request(
+                "POST",
+                "/api/v1/weight-commits",
+                json={
+                    "validator_hotkey": validator_hotkey,
+                    "netuid": netuid,
+                    "weight_hash": weight_hash,
+                    "weight_data": weight_data,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to report weight commit: {e}")
 

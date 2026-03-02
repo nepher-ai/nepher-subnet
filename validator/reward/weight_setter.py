@@ -6,9 +6,12 @@ Handles:
 - Finding winner UID in metagraph
 - Setting weights on chain
 - Burning on UID 0 as fallback
+- Deduplicating weight sets across CPU/GPU validators sharing a hotkey
 """
 
 import asyncio
+import hashlib
+from datetime import datetime, timezone
 from typing import Optional, List
 
 import bittensor as bt
@@ -27,6 +30,12 @@ from nepher_core.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def compute_weight_hash(weight_map: dict[int, float]) -> str:
+    """Deterministic SHA-256 of a weight distribution."""
+    canonical = ",".join(f"{uid}:{w}" for uid, w in sorted(weight_map.items()))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 class WeightSetter:
     """
     Handles weight setting during reward phase.
@@ -36,9 +45,12 @@ class WeightSetter:
     - Find winner's UID in metagraph
     - Set all weight to winner UID
     - Burn on UID 0 if no winner or winner not found
+    - Allocate a small fraction to the preliminary leader during non-reward periods
     """
 
     BURN_UID = 0  # UID to burn to when no winner
+    LEADER_WEIGHT_FRACTION = 0.01  # 1% emission to preliminary leader
+    DEDUP_WINDOW = 900  # 15 minutes — skip if identical weights committed within this window
 
     def __init__(
         self,
@@ -83,16 +95,50 @@ class WeightSetter:
 
     WEIGHT_SET_INTERVAL = 1800  # Re-set weights every 30 minutes
 
-    async def burn(self) -> None:
+    async def burn(
+        self,
+        tournament_id: Optional[str] = None,
+        phase: str = "public",
+    ) -> None:
         """
-        Burn on UID 0 — set all weight to ``BURN_UID``.
-        
-        Public helper used by the CPU validator for periodic burns
-        outside the reward period.
+        Burn on UID 0, optionally allocating 1% to the preliminary leader.
+
+        When *tournament_id* is provided the method fetches the current
+        leaderboard leader from the backend.  If a leader is found and
+        present in the metagraph, weights are split as
+        ``{leader_uid: 1%, BURN_UID: 99%}``.  Otherwise 100% is burned.
+
+        Args:
+            tournament_id: Tournament to look up the leader for.
+            phase: Leaderboard phase — ``"public"`` during evaluation,
+                   ``"private"`` during review when final scores are available.
         """
-        logger.info("Burning on UID 0")
         metagraph = self._get_metagraph()
-        await self._set_weights(self.BURN_UID, metagraph)
+
+        if tournament_id is not None:
+            try:
+                leader = await self.api.get_preliminary_leader(tournament_id, phase=phase)
+                if leader.leader_hotkey:
+                    leader_uid = find_uid_for_hotkey(metagraph, leader.leader_hotkey)
+                    if leader_uid is not None:
+                        logger.info(
+                            f"Preliminary leader UID {leader_uid} "
+                            f"(hotkey {leader.leader_hotkey[:16]}…) — "
+                            f"allocating {self.LEADER_WEIGHT_FRACTION:.0%} weight"
+                        )
+                        await self._set_weight_distribution(
+                            {
+                                leader_uid: self.LEADER_WEIGHT_FRACTION,
+                                self.BURN_UID: 1.0 - self.LEADER_WEIGHT_FRACTION,
+                            },
+                            metagraph,
+                        )
+                        return
+            except Exception as e:
+                logger.warning(f"Preliminary leader lookup failed, falling back to full burn: {e}")
+
+        logger.info("Burning on UID 0")
+        await self._set_weight_distribution({self.BURN_UID: 1.0}, metagraph)
 
     async def run_reward(
         self,
@@ -192,28 +238,65 @@ class WeightSetter:
         target_uid: int,
         metagraph: bt.Metagraph,
     ) -> None:
+        """Set all weight to a single UID (convenience wrapper)."""
+        await self._set_weight_distribution({target_uid: 1.0}, metagraph)
+
+    async def _set_weight_distribution(
+        self,
+        weight_map: dict[int, float],
+        metagraph: bt.Metagraph,
+    ) -> None:
         """
-        Set all weight to a single UID.
-        
+        Set on-chain weights from an arbitrary ``{uid: weight}`` mapping.
+
+        Includes a dedup check via the tournament backend: if the exact same
+        weights were already committed on-chain (by this or another validator
+        instance sharing the hotkey) within ``DEDUP_WINDOW`` seconds, the
+        on-chain call is skipped entirely.
+
         Args:
-            target_uid: UID to give all weight
-            metagraph: Current metagraph
+            weight_map: Mapping of UID -> weight fraction (should sum to 1.0).
+            metagraph: Current metagraph.
         """
         wallet = self._load_wallet()
         subtensor = self._get_subtensor()
         netuid = self.config.subnet.subnet_uid
-        
-        # Prepare weights - all 0 except target
+        weight_hash = compute_weight_hash(weight_map)
+
+        # --- dedup check ---
+        try:
+            latest = await self.api.get_latest_weight_commit(
+                validator_hotkey=wallet.hotkey.ss58_address,
+                netuid=netuid,
+            )
+            if (
+                latest is not None
+                and latest.weight_hash == weight_hash
+                and (datetime.now(timezone.utc) - latest.committed_at.replace(tzinfo=timezone.utc)).total_seconds()
+                < self.DEDUP_WINDOW
+            ):
+                age = int(
+                    (datetime.now(timezone.utc) - latest.committed_at.replace(tzinfo=timezone.utc)).total_seconds()
+                )
+                logger.info(
+                    f"Skipping redundant weight set (same hash committed {age}s ago)"
+                )
+                return
+        except Exception as e:
+            logger.debug(f"Weight commit dedup check failed, proceeding: {e}")
+
         uids: List[int] = list(range(len(metagraph.uids)))
         weights: List[float] = [0.0] * len(uids)
-        weights[target_uid] = 1.0
-        
-        logger.info(f"Setting weight to UID {target_uid}...")
-        
-        # Retry logic for weight setting
+        for uid, w in weight_map.items():
+            weights[uid] = w
+
+        desc = ", ".join(f"UID {u}: {w:.2%}" for u, w in weight_map.items())
+        logger.info(f"Setting weights: {desc}")
+
         max_attempts = self.config.retry.weight_setting_max_attempts
         delay = self.config.retry.weight_setting_initial_delay
-        
+        success = False
+
         for attempt in range(1, max_attempts + 1):
             try:
                 success, message = subtensor.set_weights(
@@ -224,35 +307,48 @@ class WeightSetter:
                     wait_for_inclusion=True,
                     wait_for_finalization=False,
                 )
-                
+
                 if success:
-                    logger.info(f"✅ Weights set successfully to UID {target_uid}")
-                    return
+                    logger.info(f"✅ Weights set successfully ({desc})")
+                    break
                 else:
                     logger.warning(f"Weight setting returned: {message}")
-                    
+
             except Exception as e:
                 logger.error(f"Attempt {attempt}/{max_attempts} failed: {e}")
-            
+
             if attempt < max_attempts:
                 logger.info(f"Retrying in {delay}s...")
                 await asyncio.sleep(delay)
-                delay *= 2  # Exponential backoff
-        
+                delay *= 2
+
+        # --- report on success ---
+        if success:
+            try:
+                await self.api.report_weight_commit(
+                    validator_hotkey=wallet.hotkey.ss58_address,
+                    netuid=netuid,
+                    weight_hash=weight_hash,
+                    weight_data={str(uid): w for uid, w in weight_map.items()},
+                )
+            except Exception as e:
+                logger.debug(f"Failed to report weight commit: {e}")
+            return
+
         logger.error(f"Failed to set weights after {max_attempts} attempts")
-        
-        # If we can't set weights to winner, try to burn
-        if target_uid != self.BURN_UID:
+
+        is_pure_burn = list(weight_map.keys()) == [self.BURN_UID]
+        if not is_pure_burn:
             logger.info("Attempting to burn on UID 0 as fallback...")
-            weights = [0.0] * len(uids)
-            weights[self.BURN_UID] = 1.0
-            
+            fallback_weights = [0.0] * len(uids)
+            fallback_weights[self.BURN_UID] = 1.0
+
             try:
                 subtensor.set_weights(
                     wallet=wallet,
                     netuid=netuid,
                     uids=uids,
-                    weights=weights,
+                    weights=fallback_weights,
                     wait_for_inclusion=True,
                 )
                 logger.info("Fallback: burned on UID 0")
