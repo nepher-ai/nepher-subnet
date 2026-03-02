@@ -64,14 +64,16 @@ def get_current_period(
     if current_time < tournament.contest_start_time:
         return TournamentPeriod.NO_TOURNAMENT
     
-    # Contest period — check for public evaluation first
+    # Public evaluation takes precedence even if submit window has started
+    if (
+        tournament.has_public_eval
+        and tournament.public_eval_end_time
+        and current_time < tournament.public_eval_end_time
+    ):
+        return TournamentPeriod.PUBLIC_EVALUATION
+    
+    # Contest sub-periods (before submit window)
     if tournament.submit_window_start_time and current_time < tournament.submit_window_start_time:
-        if (
-            tournament.has_public_eval
-            and tournament.public_eval_end_time
-            and current_time < tournament.public_eval_end_time
-        ):
-            return TournamentPeriod.PUBLIC_EVALUATION
         if (
             tournament.has_public_eval
             and tournament.public_eval_end_time
