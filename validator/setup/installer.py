@@ -190,28 +190,51 @@ async def download_environments(
         raise SetupError(f"Environment download failed: {e}")
 
 
+async def _get_git_remote_url(target_path: Path) -> Optional[str]:
+    """Return the origin remote URL of an existing git repo, or None."""
+    return_code, stdout, _ = await run_command_async(
+        ["git", "-C", str(target_path), "remote", "get-url", "origin"],
+        timeout=30,
+    )
+    if return_code == 0 and stdout:
+        return stdout.strip()
+    return None
+
+
 async def setup_eval_repo(
     repo_url: str,
     target_path: Path,
 ) -> None:
     """
     Clone or update the evaluation repository.
+
+    If the directory already exists but points to a different remote URL
+    (e.g. eval_repo_url changed in common_config), the old clone is removed
+    and replaced with a fresh clone from the new URL.
     
     Args:
         repo_url: Git repository URL
         target_path: Path to clone/update to
     """
     if target_path.exists():
-        # Update existing repo
-        logger.info(f"Updating evaluation repo at {target_path}")
-        return_code, stdout, stderr = await run_command_async(
-            ["git", "-C", str(target_path), "pull"],
-            timeout=120,
-        )
-        if return_code != 0:
-            logger.warning(f"Git pull failed: {stderr}")
-    else:
-        # Clone new repo
+        current_url = await _get_git_remote_url(target_path)
+        if current_url and current_url.rstrip("/") != repo_url.rstrip("/"):
+            logger.info(
+                f"Eval repo URL changed ({current_url} -> {repo_url}). "
+                "Removing old clone and re-cloning..."
+            )
+            import shutil
+            shutil.rmtree(target_path)
+        else:
+            logger.info(f"Updating evaluation repo at {target_path}")
+            return_code, stdout, stderr = await run_command_async(
+                ["git", "-C", str(target_path), "pull"],
+                timeout=120,
+            )
+            if return_code != 0:
+                logger.warning(f"Git pull failed: {stderr}")
+
+    if not target_path.exists():
         logger.info(f"Cloning evaluation repo to {target_path}")
         return_code, stdout, stderr = await run_command_async(
             ["git", "clone", repo_url, str(target_path)],
