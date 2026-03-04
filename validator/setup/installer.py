@@ -195,30 +195,28 @@ async def setup_eval_repo(
     target_path: Path,
 ) -> None:
     """
-    Clone or update the evaluation repository.
+    Fresh-clone the evaluation repository.
+
+    Always removes any existing clone and performs a clean ``git clone``
+    so that the repo is guaranteed to be up-to-date and free of local
+    modifications or stale state.
     
     Args:
         repo_url: Git repository URL
-        target_path: Path to clone/update to
+        target_path: Path to clone to
     """
     if target_path.exists():
-        # Update existing repo
-        logger.info(f"Updating evaluation repo at {target_path}")
-        return_code, stdout, stderr = await run_command_async(
-            ["git", "-C", str(target_path), "pull"],
-            timeout=120,
-        )
-        if return_code != 0:
-            logger.warning(f"Git pull failed: {stderr}")
-    else:
-        # Clone new repo
-        logger.info(f"Cloning evaluation repo to {target_path}")
-        return_code, stdout, stderr = await run_command_async(
-            ["git", "clone", repo_url, str(target_path)],
-            timeout=300,
-        )
-        if return_code != 0:
-            raise SetupError(f"Git clone failed: {stderr}")
+        import shutil
+        logger.info(f"Removing existing eval repo at {target_path} for fresh clone")
+        shutil.rmtree(target_path)
+
+    logger.info(f"Cloning evaluation repo from {repo_url} to {target_path}")
+    return_code, stdout, stderr = await run_command_async(
+        ["git", "clone", repo_url, str(target_path)],
+        timeout=300,
+    )
+    if return_code != 0:
+        raise SetupError(f"Git clone failed: {stderr}")
     
     # Install the repo
     logger.info("Installing evaluation repo...")

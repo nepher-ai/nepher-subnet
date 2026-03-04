@@ -14,7 +14,7 @@ tournament:
 
 # Isaac Lab/Sim version requirements
 isaac:
-  lab_version: "2.3.0"
+  lab_version: "2.3.2"
   sim_version: "5.1"
 
 # Paths configuration

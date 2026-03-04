@@ -56,14 +56,23 @@ class ValidatorOrchestrator:
     ERROR_INTERVAL = 60  # 1 minute
     BURN_INTERVAL = 1800  # 30 minutes — cadence for UID-0 burns in CPU mode
 
-    def __init__(self, config: ValidatorConfig):
+    def __init__(
+        self,
+        config: ValidatorConfig,
+        config_path: Path,
+        mode_override: Optional[str] = None,
+    ):
         """
         Initialize validator orchestrator.
         
         Args:
             config: Validator configuration
+            config_path: Path to the user config file (for hot-reloading)
+            mode_override: CLI mode override, preserved across reloads
         """
         self.config = config
+        self._config_path = config_path
+        self._mode_override = mode_override
         self.mode = config.mode  # "gpu" or "cpu"
         
         # Load wallet and get hotkey
@@ -90,6 +99,47 @@ class ValidatorOrchestrator:
         
         # Current tournament
         self._current_tournament: Optional[Tournament] = None
+
+    def _reload_config(self) -> None:
+        """
+        Re-read config files from disk so that changes to common_config.yaml
+        (lab_version, sim_version, eval_repo_url, etc.) are picked up
+        automatically when a new tournament starts.
+        """
+        logger.info("Reloading configuration from disk...")
+        try:
+            new_config = load_config(self._config_path, ValidatorConfig)
+            if self._mode_override is not None:
+                new_config.mode = self._mode_override
+
+            old_isaac = self.config.isaac
+            old_paths = self.config.paths
+            new_isaac = new_config.isaac
+            new_paths = new_config.paths
+
+            changes: list[str] = []
+            if old_isaac.lab_version != new_isaac.lab_version:
+                changes.append(f"lab_version: {old_isaac.lab_version} -> {new_isaac.lab_version}")
+            if old_isaac.sim_version != new_isaac.sim_version:
+                changes.append(f"sim_version: {old_isaac.sim_version} -> {new_isaac.sim_version}")
+            if old_paths.eval_repo_url != new_paths.eval_repo_url:
+                changes.append(f"eval_repo_url: {old_paths.eval_repo_url} -> {new_paths.eval_repo_url}")
+
+            if changes:
+                for c in changes:
+                    logger.info(f"  Config changed — {c}")
+            else:
+                logger.info("  No config changes detected")
+
+            self.config = new_config
+            self.mode = new_config.mode
+
+            self._setup_manager = None
+            self._evaluation_orchestrator = None
+            self._weight_setter = None
+            logger.info("Configuration reloaded; phase handlers will be re-initialized")
+        except Exception as e:
+            logger.error(f"Failed to reload config — continuing with previous config: {e}")
 
     async def run(self) -> None:
         """
@@ -134,10 +184,14 @@ class ValidatorOrchestrator:
                     await asyncio.sleep(self.NO_TOURNAMENT_INTERVAL)
                     continue
                 
-                # Check for tournament change
+                # Detect new or changed tournament — reload config so
+                # common_config updates take effect, and reset setup state
+                # so the eval repo is freshly cloned.
                 if self.state.check_tournament_change(tournament.id):
-                    logger.info(f"Tournament changed to: {tournament.id}")
+                    logger.info(f"New tournament detected: {tournament.id}")
+                    self._reload_config()
                     self.state.reset()
+                self.state.track_tournament(tournament.id)
                 
                 # 2. Determine current period
                 current_time = int(time.time())
@@ -234,9 +288,15 @@ class ValidatorOrchestrator:
                 await self._hourly_burn(tournament)
 
     async def _run_setup(self, tournament: Tournament) -> None:
-        """Run setup phase."""
-        if self._setup_manager is None:
-            self._setup_manager = SetupManager(self.config, self.api)
+        """Run setup phase.
+
+        Always reloads configuration from disk so that any changes to
+        common_config.yaml (eval_repo_url, lab_version, etc.) are picked
+        up before the fresh setup.
+        """
+        self._reload_config()
+
+        self._setup_manager = SetupManager(self.config, self.api)
         
         try:
             await self._setup_manager.run_setup(tournament.id)
@@ -341,6 +401,6 @@ async def run_validator(config_path: Path, mode: Optional[str] = None) -> None:
         config.mode = mode
     
     # Create and run orchestrator
-    orchestrator = ValidatorOrchestrator(config)
+    orchestrator = ValidatorOrchestrator(config, config_path, mode_override=mode)
     await orchestrator.run()
 

@@ -128,6 +128,18 @@ class ValidatorStateManager:
         """Get current tournament ID."""
         return self._current_tournament_id
 
+    def track_tournament(self, tournament_id: str) -> None:
+        """
+        Record the tournament ID we are currently working on.
+
+        Called every loop iteration so that ``check_tournament_change``
+        can detect when a *different* tournament appears.
+
+        Args:
+            tournament_id: Active tournament ID
+        """
+        self._current_tournament_id = tournament_id
+
     def mark_setup_complete(self, tournament_id: str) -> None:
         """
         Mark setup as complete for a tournament.
@@ -142,15 +154,19 @@ class ValidatorStateManager:
     def check_tournament_change(self, tournament_id: str) -> bool:
         """
         Check if tournament has changed (requires reset).
+
+        Returns True when *any* new tournament is detected — including
+        the first tournament after a reset (when _current_tournament_id
+        is None).
         
         Args:
             tournament_id: New tournament ID
             
         Returns:
-            True if tournament changed
+            True if tournament changed or is newly detected
         """
         if self._current_tournament_id is None:
-            return False
+            return True
         return self._current_tournament_id != tournament_id
 
     def on_period_change(
