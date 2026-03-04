@@ -184,12 +184,14 @@ class ValidatorOrchestrator:
                     await asyncio.sleep(self.NO_TOURNAMENT_INTERVAL)
                     continue
                 
-                # Check for tournament change — reload config so common_config
-                # updates (lab_version, sim_version, eval_repo_url …) take effect.
+                # Detect new or changed tournament — reload config so
+                # common_config updates take effect, and reset setup state
+                # so the eval repo is freshly cloned.
                 if self.state.check_tournament_change(tournament.id):
-                    logger.info(f"Tournament changed to: {tournament.id}")
+                    logger.info(f"New tournament detected: {tournament.id}")
                     self._reload_config()
                     self.state.reset()
+                self.state.track_tournament(tournament.id)
                 
                 # 2. Determine current period
                 current_time = int(time.time())
@@ -286,9 +288,15 @@ class ValidatorOrchestrator:
                 await self._hourly_burn(tournament)
 
     async def _run_setup(self, tournament: Tournament) -> None:
-        """Run setup phase."""
-        if self._setup_manager is None:
-            self._setup_manager = SetupManager(self.config, self.api)
+        """Run setup phase.
+
+        Always reloads configuration from disk so that any changes to
+        common_config.yaml (eval_repo_url, lab_version, etc.) are picked
+        up before the fresh setup.
+        """
+        self._reload_config()
+
+        self._setup_manager = SetupManager(self.config, self.api)
         
         try:
             await self._setup_manager.run_setup(tournament.id)
