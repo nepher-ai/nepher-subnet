@@ -185,6 +185,9 @@ class ValidatorStateManager:
             logger.info(f"Period transition: {old_period.value} → {new_period.value}")
             if new_period == TournamentPeriod.QUIET_ZONE:
                 logger.info("Entering quiet zone — stopping evaluations, preparing for private phase")
+            if new_period == TournamentPeriod.EVALUATION:
+                logger.info("Entering private evaluation — resetting setup to download private config")
+                self._setup_complete = False
             self._last_period = new_period
 
     def reset(self) -> None:
