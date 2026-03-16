@@ -34,7 +34,7 @@ retry:
 
   # Evaluation retries
   evaluation_max_attempts: 2
-  evaluation_timeout_seconds: 3600   # 1 hour per agent
+  evaluation_timeout_seconds: 1800   # 30 minutes per agent
 
   # Weight setting retries
   weight_setting_max_attempts: 8
