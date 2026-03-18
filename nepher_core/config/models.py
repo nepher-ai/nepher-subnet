@@ -131,7 +131,7 @@ class RetryConfig(BaseModel):
     
     # Evaluation retry settings
     evaluation_max_attempts: int = Field(default=2, ge=1)
-    evaluation_timeout_seconds: int = Field(default=3600, ge=60)  # 1 hour default
+    evaluation_timeout_seconds: int = Field(default=1800, ge=60)  # 30 minutes default
     
     # Weight setting retry settings
     weight_setting_max_attempts: int = Field(default=5, ge=1)

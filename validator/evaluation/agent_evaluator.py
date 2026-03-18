@@ -16,6 +16,7 @@ All agent code runs inside an isolated sandbox container with:
   - Dropped Linux capabilities
 """
 
+import asyncio
 import json
 import os
 import shutil
@@ -59,6 +60,9 @@ class AgentEvaluator:
     5. Submit results
     6. Cleanup
     """
+
+    MODEL_VALIDATION_TIMEOUT = 120  # seconds — fast-fail on corrupt/unloadable checkpoints
+    MAX_POLICY_SIZE_MB = 2048  # reject files larger than 2 GB
 
     def __init__(
         self,
@@ -172,6 +176,60 @@ class AgentEvaluator:
 
         logger.warning(f"Policy checkpoint not found: {policy_file}")
         return None
+
+    async def _validate_model_weights(self) -> None:
+        """
+        Pre-flight check: load the policy checkpoint in an isolated subprocess
+        with a tight timeout.  Catches corrupt, incompatible, or adversarial
+        .pt files in ~2 minutes instead of burning the full evaluation timeout.
+        Skipped when no policy file is present (some tasks don't require one).
+        """
+        policy_file = self.registry_path / "best_policy" / "best_policy.pt"
+        if not policy_file.exists():
+            return
+
+        size_mb = policy_file.stat().st_size / (1024 * 1024)
+        if size_mb > self.MAX_POLICY_SIZE_MB:
+            raise EvaluationError(
+                f"Policy file too large ({size_mb:.0f} MB, "
+                f"limit {self.MAX_POLICY_SIZE_MB} MB)",
+                recoverable=False,
+            )
+
+        logger.info(
+            f"Validating model weights ({size_mb:.1f} MB, "
+            f"timeout {self.MODEL_VALIDATION_TIMEOUT}s)..."
+        )
+
+        validation_script = (
+            "import sys, torch; "
+            "cp = torch.load(sys.argv[1], map_location='cpu', weights_only=True); "
+            "t = type(cp).__name__; "
+            "n = len(cp) if isinstance(cp, dict) else -1; "
+            "print(f'OK type={t} keys={n}')"
+        )
+
+        try:
+            return_code, stdout, stderr = await run_command_async(
+                [sys.executable, "-c", validation_script, str(policy_file)],
+                timeout=self.MODEL_VALIDATION_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            raise EvaluationError(
+                f"Model weight validation timed out after "
+                f"{self.MODEL_VALIDATION_TIMEOUT}s — file is likely corrupt "
+                f"or not a valid PyTorch checkpoint",
+                recoverable=False,
+            )
+
+        if return_code != 0:
+            detail = (stderr or stdout)[-500:]
+            raise EvaluationError(
+                f"Model weight validation failed: {detail}",
+                recoverable=False,
+            )
+
+        logger.info(f"Model weights validated: {stdout.strip()}")
 
     def _build_eval_config(self) -> Path:
         """
