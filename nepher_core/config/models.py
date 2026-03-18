@@ -134,8 +134,8 @@ class RetryConfig(BaseModel):
     evaluation_timeout_seconds: int = Field(default=3600, ge=60)  # 1 hour default
     
     # Weight setting retry settings
-    weight_setting_max_attempts: int = Field(default=5, ge=1)
-    weight_setting_initial_delay: float = Field(default=5.0, ge=1.0)
+    weight_setting_max_attempts: int = Field(default=2, ge=1)
+    weight_setting_initial_delay: float = Field(default=2.0, ge=1.0)
 
 
 class EnvScene(BaseModel):

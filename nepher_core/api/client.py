@@ -6,6 +6,8 @@ Used by both miners (submission) and validators (evaluation, reward).
 """
 
 import asyncio
+import os
+import shutil
 from pathlib import Path
 from typing import Optional, Any
 from urllib.parse import urljoin
@@ -88,6 +90,11 @@ class TournamentAPI:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+
+    @property
+    def _local_zip(self) -> Optional[str]:
+        """Return local agent ZIP path if in local evaluation mode."""
+        return "/app/project/1773160710.444041.zip"
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create async HTTP client."""
@@ -238,6 +245,24 @@ class TournamentAPI:
             
         Endpoint: GET /api/v1/tournaments/active?subnet=true
         """
+        # --- LOCAL MOCK ---
+        if self._local_zip:
+            import time
+            now = int(time.time())
+            mock_tournament = Tournament(
+                id="local-tournament",
+                status="active",
+                name="Local Evaluation",
+                contest_start_time=now - 7200,
+                submit_window_start_time=now - 5400,
+                contest_end_time=now - 3600,
+                evaluation_start_time=now - 3600,
+                evaluation_end_time=now + 86400,
+            )
+            logger.info("[LOCAL] Returning mock tournament in EVALUATION period")
+            return mock_tournament
+        # --- END LOCAL MOCK ---
+
         try:
             logger.info(f"Fetching active tournament from {self.base_url}/api/v1/tournaments/active")
             response = await self._request(
@@ -522,6 +547,22 @@ class TournamentAPI:
         if phase is not None:
             params["phase"] = phase
 
+        # --- LOCAL MOCK ---
+        if self._local_zip:
+            zip_path = Path(self._local_zip)
+            agent_id = zip_path.stem
+            logger.info(f"[LOCAL] Mock pending agent from: {zip_path}")
+            mock_agent = Agent(
+                id=agent_id,
+                tournament_id=tournament_id,
+                miner_hotkey="local-test",
+                status="pending",
+                file_path=str(zip_path),
+                file_size=zip_path.stat().st_size if zip_path.exists() else 0,
+            )
+            return AgentListResponse(agents=[mock_agent], total=1, limit=1, offset=0)
+        # --- END LOCAL MOCK ---
+
         response = await self._request(
             "GET",
             "/api/v1/agents/list/unevaluated",
@@ -546,6 +587,15 @@ class TournamentAPI:
             
         Endpoint: GET /api/v1/agents/download/{id}
         """
+        # --- LOCAL MOCK ---
+        if self._local_zip:
+            zip_path = Path(self._local_zip)
+            logger.info(f"[LOCAL] Copying local ZIP: {zip_path} -> {output_path}")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(zip_path, output_path)
+            return output_path
+        # --- END LOCAL MOCK ---
+
         client = await self._get_client()
         url = self._build_url(f"/api/v1/agents/download/{agent_id}")
         
@@ -608,6 +658,12 @@ class TournamentAPI:
 
         Endpoint: POST /api/v1/evaluations/in-progress/cli
         """
+        # --- LOCAL MOCK ---
+        if self._local_zip:
+            logger.info(f"[LOCAL] Skipping set_evaluation_in_progress for agent={agent_id}")
+            return
+        # --- END LOCAL MOCK ---
+
         self._require_wallet()
 
         from nepher_core.wallet import create_eval_info
@@ -647,6 +703,12 @@ class TournamentAPI:
 
         Endpoint: POST /api/v1/evaluations/in-progress/cli (with agent_id=null)
         """
+        # --- LOCAL MOCK ---
+        if self._local_zip:
+            logger.debug(f"[LOCAL] Skipping clear_evaluation_in_progress")
+            return
+        # --- END LOCAL MOCK ---
+
         self._require_wallet()
 
         from nepher_core.wallet import create_eval_info
@@ -751,6 +813,14 @@ class TournamentAPI:
             1. POST /api/v1/evaluations/submit/verify
             2. POST /api/v1/evaluations/submit (Form + X-Upload-Token)
         """
+        # --- LOCAL MOCK ---
+        if self._local_zip:
+            logger.info(f"[LOCAL] Evaluation result for agent={agent_id}: score={score}")
+            logger.info(f"[LOCAL] Metadata: {metadata}")
+            logger.info(f"[LOCAL] Summary: {summary}")
+            return
+        # --- END LOCAL MOCK ---
+
         import hashlib
         import json
 
@@ -836,6 +906,12 @@ class TournamentAPI:
             1. POST /api/v1/evaluations/submit/verify
             2. POST /api/v1/evaluations/submit (Form + X-Upload-Token)
         """
+        # --- LOCAL MOCK ---
+        if self._local_zip:
+            logger.error(f"[LOCAL] Evaluation failed for agent={agent_id}: {error_reason}")
+            return
+        # --- END LOCAL MOCK ---
+
         # Step 1: Verify and get upload token
         token = await self._verify_evaluation_submit(
             tournament_id=tournament_id,

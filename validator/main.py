@@ -8,6 +8,7 @@ The central coordinator that manages the validator lifecycle:
 """
 
 import asyncio
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -275,7 +276,13 @@ class ValidatorOrchestrator:
                     
             case TournamentPeriod.EVALUATION:
                 if not self.state.is_setup_complete:
-                    await self._run_setup(tournament)
+                    if self.api._local_zip:
+                        logger.info("[LOCAL] Skipping setup — using existing workspace")
+                        self._load_task_config_from_workspace()
+                        self._ensure_local_env_cache()
+                        self.state.mark_setup_complete(tournament.id)
+                    else:
+                        await self._run_setup(tournament)
                 await self._run_evaluation(tournament, phase="private")
                 
             case TournamentPeriod.REVIEW:
@@ -286,6 +293,53 @@ class ValidatorOrchestrator:
                 logger.info("Tournament completed")
                 self.state.reset()
                 await self._hourly_burn(tournament)
+
+    def _load_task_config_from_workspace(self) -> None:
+        """Load task_config.yaml from workspace without downloading from API."""
+        task_config_path = self.config.paths.workspace / "task_config.yaml"
+        if task_config_path.exists():
+            config_manager = ConfigManager()
+            self.config.task_config = config_manager.load_task_config(task_config_path)
+            logger.info(f"[LOCAL] Loaded task config: {self.config.task_config.task_module}")
+        else:
+            logger.error(f"task_config.yaml not found at {task_config_path}")
+
+    def _ensure_local_env_cache(self) -> None:
+        """In local mode, download required environments if not already cached.
+
+        During normal operation ``run_setup`` handles this.  In local mock
+        mode setup is skipped, so we need to ensure the benchmark data
+        exists in the validator's cache (which is shared with sandbox
+        containers via a bind-mount).
+        """
+        if self.config.task_config is None:
+            return
+
+        cache_dir = self.config.paths.env_cache
+        env_ids = [es.env_id for es in self.config.task_config.env_scenes]
+
+        missing = [eid for eid in env_ids if not (cache_dir / eid).exists()]
+        if not missing:
+            logger.info(f"[LOCAL] Environment cache OK: {env_ids}")
+            return
+
+        logger.info(f"[LOCAL] Downloading missing environments: {missing}")
+        try:
+            import asyncio
+            from validator.setup.installer import download_environments
+
+            asyncio.get_event_loop().run_until_complete(
+                download_environments(
+                    missing,
+                    cache_path=cache_dir,
+                    api_key=self.config.api_key,
+                )
+            )
+        except Exception as e:
+            logger.warning(
+                f"[LOCAL] Failed to download environments: {e}. "
+                f"Copy them manually to {cache_dir}"
+            )
 
     async def _run_setup(self, tournament: Tournament) -> None:
         """Run setup phase.
