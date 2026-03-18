@@ -258,37 +258,54 @@ class SetupManager:
         """Check if setup has been completed."""
         return self._setup_complete
 
+    @property
+    def _sandbox_mode(self) -> bool:
+        """Check if running in Docker-in-Docker sandbox architecture.
+
+        When SANDBOX_IMAGE is set, Isaac Sim and eval-nav live inside the
+        sandbox container — the validator only needs configs and environments.
+        """
+        return bool(os.environ.get("SANDBOX_IMAGE"))
+
     async def run_setup(self, tournament_id: str) -> None:
         """
         Run complete setup phase.
-        
+
+        In sandbox mode (SANDBOX_IMAGE set), skips Isaac verification and
+        eval-repo setup because those live inside the sandbox container.
+
         Args:
             tournament_id: Tournament ID to setup for
-            
+
         Raises:
             SetupError: If any setup step fails
         """
         logger.info("=" * 60)
         logger.info("Starting validator setup phase")
+        if self._sandbox_mode:
+            logger.info("  (sandbox mode — Isaac/eval-repo handled by sandbox container)")
         logger.info("=" * 60)
-        
-        # Step 1: Verify Isaac installation
-        logger.info("Step 1: Verifying Isaac Lab/Sim installation...")
-        if not verify_isaac_installation(
-            self.config.isaac.lab_version,
-            self.config.isaac.sim_version,
-        ):
-            raise SetupError("Isaac Lab/Sim verification failed")
-        
+
+        # Step 1: Verify Isaac installation (skip in sandbox mode)
+        if not self._sandbox_mode:
+            logger.info("Step 1: Verifying Isaac Lab/Sim installation...")
+            if not verify_isaac_installation(
+                self.config.isaac.lab_version,
+                self.config.isaac.sim_version,
+            ):
+                raise SetupError("Isaac Lab/Sim verification failed")
+        else:
+            logger.info("Step 1: Skipped — Isaac Sim lives in sandbox container")
+
         # Step 2: Verify nepher installed
         logger.info("Step 2: Verifying nepher package...")
         if not verify_nepher_installed():
             raise SetupError("nepher package not installed")
-        
+
         # Step 3: Download tournament configs
         logger.info("Step 3: Downloading tournament configurations...")
         await self._download_configs(tournament_id)
-        
+
         # Step 4: Download environments
         logger.info("Step 4: Downloading required environments...")
         env_ids = self._get_required_env_ids()
@@ -297,19 +314,22 @@ class SetupManager:
             self.config.paths.env_cache,
             api_key=self.config.api_key,
         )
-        
+
         # Propagate the cache directory to the process environment so that
         # any subprocess (e.g. the evaluation script) using the nepher library
         # resolves the same cache location.
         os.environ["NEPHER_CACHE_DIR"] = str(self.config.paths.env_cache)
-        
-        # Step 5: Setup evaluation repo
-        logger.info("Step 5: Setting up evaluation repository...")
-        await setup_eval_repo(
-            repo_url=self.config.paths.eval_repo_url,
-            target_path=self.config.paths.eval_repo,
-        )
-        
+
+        # Step 5: Setup evaluation repo (skip in sandbox mode)
+        if not self._sandbox_mode:
+            logger.info("Step 5: Setting up evaluation repository...")
+            await setup_eval_repo(
+                repo_url=self.config.paths.eval_repo_url,
+                target_path=self.config.paths.eval_repo,
+            )
+        else:
+            logger.info("Step 5: Skipped — eval-nav baked into sandbox container")
+
         self._setup_complete = True
         logger.info("=" * 60)
         logger.info("Setup phase complete!")
