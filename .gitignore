@@ -130,5 +130,4 @@ config/miner_config.yaml
 outputs/
 IsaacLab/
 
-/*.zip
 data/
