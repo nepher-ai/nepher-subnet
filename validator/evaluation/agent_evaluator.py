@@ -138,6 +138,10 @@ class AgentEvaluator:
         logger.debug("Cleaning previous evaluation state")
         clean_directory(self.registry_path)
         self.result_path.unlink(missing_ok=True)
+        # Clean leftover sandbox dirs from crashed runs
+        sandbox_base = self.workspace / "sandbox"
+        if sandbox_base.exists():
+            shutil.rmtree(sandbox_base, ignore_errors=True)
 
     async def _prepare_agent(self, agent: Agent) -> None:
         """Download and extract agent archive."""
@@ -254,6 +258,7 @@ class AgentEvaluator:
             )
         finally:
             if log_file:
+                logger.info(f"submitted evaluation results {log_file}")
                 log_file.unlink(missing_ok=True)
 
     def _create_log_archive(self, log_dir: Optional[str]) -> Optional[Path]:

@@ -6,8 +6,8 @@ in complete isolation. The sandbox container has:
   - GPU access (for Isaac Sim evaluation)
   - NO wallet access
   - NO Docker socket access
-  - Network blocklist (metadata, private networks, dangerous ports blocked)
-  - Dropped Linux capabilities (except DAC_READ_SEARCH + NET_ADMIN for firewall)
+  - NO host network access
+  - Dropped Linux capabilities
   - Read-only agent files
   - Write access only to output directory
 
@@ -51,10 +51,9 @@ class SandboxRunner:
     Each evaluation spawns an isolated container that:
     1. Receives agent files via volume mount (read-only)
     2. Receives eval config via volume mount (read-only)
-    3. Sets up iptables firewall (whitelist-only network access)
-    4. Installs agent module, runs evaluation
-    5. Writes evaluation_result.json to output volume
-    6. Is automatically removed after completion
+    3. Installs agent module, runs evaluation
+    4. Writes evaluation_result.json to output volume
+    5. Is automatically removed after completion
 
     IMPORTANT — Docker-in-Docker path mapping:
     The validator runs inside a container but talks to the **host** Docker
@@ -84,6 +83,9 @@ class SandboxRunner:
         self.shm_size = shm_size
 
         # Host-side path mapping for Docker-in-Docker volume mounts.
+        # Inside the validator container, workspace is at /app/workspace,
+        # but docker run -v needs the HOST path since the Docker daemon
+        # runs on the host.
         self._host_workspace = os.environ.get("HOST_WORKSPACE")
         self._host_env_cache = os.environ.get("HOST_ENV_CACHE")
 
@@ -127,9 +129,9 @@ class SandboxRunner:
         """
         Run agent evaluation in an isolated sandbox container.
 
-        The container runs with a network whitelist firewall:
-        - Allowed: pip (pypi.org), Isaac Sim assets (Omniverse CDN)
-        - Blocked: cloud metadata (169.254.x.x), all other outbound traffic
+        Spawns a single container that installs the agent module and
+        runs the evaluation. The sandbox has GPU access but no wallet,
+        no Docker socket, and dropped Linux capabilities.
 
         Args:
             agent_registry: Path to extracted agent files
@@ -161,7 +163,6 @@ class SandboxRunner:
             if task_config.exists():
                 shutil.copy2(task_config, config_dir / "task_config.yaml")
 
-            # Build docker run command
             cmd = self._build_docker_cmd(
                 container_name=container_name,
                 agent_registry=agent_registry,
@@ -172,11 +173,10 @@ class SandboxRunner:
             )
 
             logger.info(
-                f"Spawning sandbox container: {container_name} "
+                f"Sandbox container: {container_name} "
                 f"(image={self.sandbox_image}, task={task_module}, timeout={timeout}s)"
             )
 
-            # Add buffer for container startup/teardown
             container_timeout = timeout + 120
 
             returncode, stdout, stderr = await self._run_cmd(
@@ -184,21 +184,15 @@ class SandboxRunner:
             )
 
             if stdout:
-                logger.info(
-                    f"Sandbox stdout (last 2000 chars):\n{stdout[-2000:]}"
-                )
+                logger.info(f"Sandbox stdout (last 2000 chars):\n{stdout[-2000:]}")
             if stderr:
-                logger.warning(
-                    f"Sandbox stderr (last 2000 chars):\n{stderr[-2000:]}"
-                )
+                logger.warning(f"Sandbox stderr (last 2000 chars):\n{stderr[-2000:]}")
 
             # Collect result from output directory
             result = self._collect_result(output_dir)
 
             if returncode != 0:
-                logger.warning(
-                    f"Sandbox container exited with code {returncode}"
-                )
+                logger.warning(f"Sandbox container exited with code {returncode}")
                 if result.get("metadata", {}).get("error"):
                     raise SandboxError(
                         f"Sandbox evaluation failed: {result.get('summary', 'unknown error')}"
@@ -207,11 +201,7 @@ class SandboxRunner:
             return result
 
         finally:
-            # Force-remove the container if it's still running
             await self._cleanup_container(container_name)
-            # Clean up sandbox working directory
-            if sandbox_dir.exists():
-                shutil.rmtree(sandbox_dir, ignore_errors=True)
 
     def _to_host_path(self, container_path: Path) -> str:
         """Translate a container-internal path to the corresponding host path.
@@ -264,7 +254,10 @@ class SandboxRunner:
         host_config = self._to_host_path(config_dir)
         host_output = self._to_host_path(output_dir)
 
-        logger.info(f"Volume mounts: agent={host_agent}, config={host_config}, output={host_output}")
+        logger.info(
+            f"Volume mounts: agent={host_agent}, config={host_config}, "
+            f"output={host_output}"
+        )
 
         cmd = [
             "docker", "run",
@@ -273,12 +266,11 @@ class SandboxRunner:
             # Container name for tracking/cleanup
             "--name", container_name,
             # ── Security restrictions ──
-            # Drop all Linux capabilities, then add back only what's needed:
-            #   DAC_READ_SEARCH: follow _isaac_sim symlink across directories
-            #   NET_ADMIN: set up iptables firewall whitelist in entrypoint
+            # Drop all Linux capabilities, then add back only what Isaac Sim
+            # needs: DAC_READ_SEARCH is required to follow the _isaac_sim
+            # symlink across directories.
             "--cap-drop", "ALL",
             "--cap-add", "DAC_READ_SEARCH",
-            "--cap-add", "NET_ADMIN",
             # No new privileges (prevent setuid/setgid escalation)
             "--security-opt", "no-new-privileges:true",
             # Resource limits
@@ -297,6 +289,7 @@ class SandboxRunner:
             "-e", "ACCEPT_EULA=Y",
             "-e", "PRIVACY_CONSENT=Y",
             # Tell the nepher library where the environment cache is.
+            # The entrypoint symlinks /sandbox/envs → /root/.cache/nepher.
             "-e", "NEPHER_CACHE_DIR=/root/.cache/nepher",
             # ── Volume mounts (using HOST paths for DinD) ──
             # Agent files (READ-ONLY — cannot modify or escape)
@@ -320,7 +313,6 @@ class SandboxRunner:
         # The sandbox image
         cmd.append(self.sandbox_image)
 
-
         return cmd
 
     def _collect_result(self, output_dir: Path) -> dict[str, Any]:
@@ -332,6 +324,13 @@ class SandboxRunner:
 
         with open(result_file, "r") as f:
             result = json.load(f)
+
+        # Replace sandbox-internal log_dir with validator-side path.
+        # The entrypoint copies eval logs to /sandbox/output/eval_logs/
+        # which maps to output_dir/eval_logs on the validator.
+        eval_logs = output_dir / "eval_logs"
+        if eval_logs.exists():
+            result["log_dir"] = str(eval_logs)
 
         logger.info(f"Sandbox evaluation score: {result.get('score', 'N/A')}")
         return result

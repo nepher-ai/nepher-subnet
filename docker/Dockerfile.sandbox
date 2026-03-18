@@ -32,7 +32,6 @@ RUN mkdir -p /var/lib/apt/lists/partial \
     git \
     curl \
     python3 \
-    iptables \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
