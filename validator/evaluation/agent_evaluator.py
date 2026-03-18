@@ -8,12 +8,6 @@ Handles the complete evaluation flow for a single agent:
 - Collect and submit results
 - Cleanup
 
-SECURITY: Agent code is NEVER executed directly in the validator process.
-All agent code runs inside an isolated sandbox container with:
-  - No wallet access
-  - No Docker socket access
-  - No network access
-  - Dropped Linux capabilities
 """
 
 import asyncio

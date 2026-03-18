@@ -1,17 +1,6 @@
 """
 Sandbox container runner for isolated agent evaluation.
 
-Spawns a Docker container (nepher-sandbox) to run untrusted miner agent code
-in complete isolation. The sandbox container has:
-  - GPU access (for Isaac Sim evaluation)
-  - NO wallet access
-  - NO Docker socket access
-  - NO host network access
-  - Dropped Linux capabilities
-  - Read-only agent files
-  - Write access only to output directory
-
-This protects the validator's wallet and sensitive data from malicious agents.
 """
 
 import asyncio
