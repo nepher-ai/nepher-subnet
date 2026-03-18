@@ -1,7 +1,14 @@
 #!/bin/bash
 # Nepher Sandbox Entrypoint
 #
-# Single-phase execution: install agent module, then run evaluation.
+# Runs untrusted miner agent code in isolation with network filtering.
+#
+# Network security (transparent proxy):
+#   1. Start squid transparent proxy (SNI-based domain whitelist)
+#   2. iptables NAT redirects ALL outbound HTTPS → squid
+#   3. iptables blocks ALL direct outbound (only squid can reach internet)
+#   4. Drop NET_ADMIN capability so miner code cannot modify firewall
+#   5. Run evaluation — only whitelisted domains are reachable
 #
 # Expected mounts:
 #   /sandbox/agent   — extracted agent files (read-only)
@@ -43,6 +50,43 @@ fi
 echo "[SANDBOX] GPU OK:"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
+# ── Network firewall (transparent proxy + iptables) ────────────
+echo "[SANDBOX] Setting up network firewall..."
+
+# Start squid transparent proxy
+squid -f /etc/squid/squid.conf 2>/dev/null
+sleep 1
+
+if squid -f /etc/squid/squid.conf -k check 2>/dev/null; then
+    echo "[SANDBOX] Squid proxy started"
+else
+    echo "[SANDBOX] WARNING: Squid failed to start, continuing without proxy"
+fi
+
+# iptables: redirect all outbound HTTPS/HTTP to squid intercept ports
+# Skip redirect for squid's own connections (uid proxy) to avoid loop
+iptables -t nat -A OUTPUT -m owner --uid-owner proxy -j RETURN
+iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 3129
+iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 3128
+
+# iptables OUTPUT: allow only squid to reach the internet directly
+iptables -A OUTPUT -o lo -j ACCEPT
+iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+# Block cloud metadata endpoint (critical — prevents IAM credential theft)
+iptables -A OUTPUT -d 169.254.0.0/16 -j DROP
+# Block private networks (prevent lateral movement)
+iptables -A OUTPUT -d 10.0.0.0/8 -j DROP
+iptables -A OUTPUT -d 172.16.0.0/12 -j DROP
+iptables -A OUTPUT -d 192.168.0.0/16 -j DROP
+# Allow squid (proxy user) to make direct connections
+iptables -A OUTPUT -m owner --uid-owner proxy -j ACCEPT
+# Drop everything else
+iptables -A OUTPUT -j DROP
+
+echo "[SANDBOX] Firewall active — only whitelisted domains reachable"
+
 # ── Link environment cache ─────────────────────────────────────
 if [ -d /sandbox/envs ] && [ "$(ls -A /sandbox/envs 2>/dev/null)" ]; then
     echo "[SANDBOX] Linking environment cache..."
@@ -55,7 +99,6 @@ find /app -name "evaluation_result.json" -delete 2>/dev/null || true
 rm -f /sandbox/output/evaluation_result.json
 
 # ── Copy agent to writable location ───────────────────────────
-# /sandbox/agent is read-only; we need a writable copy for pip install -e
 echo "[SANDBOX] Copying agent to /app/agent..."
 cp -r /sandbox/agent /app/agent
 
@@ -78,7 +121,7 @@ ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-build-isolation --no-deps -e
     write_error "install_failed" "Task module installation failed"
 }
 
-# ── Run evaluation ─────────────────────────────────────────────
+# ── Run evaluation (with NET_ADMIN dropped) ────────────────────
 EVAL_SCRIPT="/app/eval-nav/scripts/evaluate.py"
 EVAL_CONFIG="/sandbox/config/eval_config.yaml"
 EVAL_TIMEOUT=${EVAL_TIMEOUT:-3600}
@@ -91,13 +134,17 @@ if [ ! -f "$EVAL_CONFIG" ]; then
 fi
 
 echo "[SANDBOX] Running evaluation (timeout: ${EVAL_TIMEOUT}s)..."
+echo "[SANDBOX] Dropping NET_ADMIN capability — firewall is now immutable"
 
 BOOTSTRAP="import multiprocessing, sys; multiprocessing.set_start_method('spawn', force=True); sys.argv = sys.argv[1:]; import runpy; runpy.run_path(sys.argv[0], run_name='__main__')"
 
-timeout "${EVAL_TIMEOUT}" ${ISAACLAB_PATH}/isaaclab.sh -p -c "$BOOTSTRAP" \
-    "$EVAL_SCRIPT" \
-    --config "$EVAL_CONFIG" \
-    --headless 2>&1
+# capsh --drop=cap_net_admin: miner code cannot modify iptables rules
+capsh --drop=cap_net_admin -- -c "
+    timeout ${EVAL_TIMEOUT} ${ISAACLAB_PATH}/isaaclab.sh -p -c \"${BOOTSTRAP}\" \
+        \"${EVAL_SCRIPT}\" \
+        --config \"${EVAL_CONFIG}\" \
+        --headless 2>&1
+"
 
 EVAL_EXIT=$?
 
@@ -115,7 +162,6 @@ if [ $EVAL_EXIT -ne 0 ]; then
 fi
 
 # ── Collect results ────────────────────────────────────────────
-# eval-nav writes evaluation_result.json to cwd or log dir; find it wherever it is
 if [ ! -f /sandbox/output/evaluation_result.json ]; then
     FOUND=$(find /app -name "evaluation_result.json" -type f 2>/dev/null | head -1)
     if [ -n "$FOUND" ]; then
@@ -124,7 +170,7 @@ if [ ! -f /sandbox/output/evaluation_result.json ]; then
     fi
 fi
 
-# Also copy the full log directory to output for the validator
+# Copy eval logs to output for the validator
 LOG_DIR=$(find /app/logs -mindepth 2 -maxdepth 2 -type d -name "eval_run_*" 2>/dev/null | sort | tail -1)
 if [ -n "$LOG_DIR" ]; then
     echo "[SANDBOX] Copying eval logs from: ${LOG_DIR}"

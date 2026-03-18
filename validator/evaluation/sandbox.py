@@ -260,6 +260,9 @@ class SandboxRunner:
             # symlink across directories.
             "--cap-drop", "ALL",
             "--cap-add", "DAC_READ_SEARCH",
+            # NET_ADMIN is needed by the entrypoint to set up iptables
+            # firewall rules. It is dropped via capsh BEFORE miner code runs.
+            "--cap-add", "NET_ADMIN",
             # No new privileges (prevent setuid/setgid escalation)
             "--security-opt", "no-new-privileges:true",
             # Resource limits
