@@ -40,9 +40,8 @@ RUN mkdir -p /var/lib/apt/lists/partial \
 
 # Transparent domain-filtering proxy (no TLS termination, no certificates)
 # Runs as a dedicated user so iptables can exempt its outbound connections.
-COPY docker/sni-proxy.py /usr/local/bin/sni-proxy.py
-RUN chmod +x /usr/local/bin/sni-proxy.py \
-    && useradd --system --no-create-home --shell /usr/sbin/nologin sniproxy
+COPY --chmod=755 docker/sni-proxy.py /usr/local/bin/sni-proxy.py
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin sniproxy
 
 # Clone Isaac Lab and install
 RUN git clone --depth 1 --branch v2.3.2 https://github.com/isaac-sim/IsaacLab.git ${ISAACLAB_PATH} \
