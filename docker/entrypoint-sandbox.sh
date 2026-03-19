@@ -66,12 +66,22 @@ echo "[SANDBOX] Starting proxy (whitelist: ${SNI_WHITELIST})..."
 su -s /bin/sh sniproxy -c \
     "python3 /usr/local/bin/sni-proxy.py --https-port 3129 --http-port 3128 \
      --whitelist '${SNI_WHITELIST}'" &
-sleep 1
 
-if pgrep -u sniproxy python3 >/dev/null 2>&1; then
+# Wait for proxy to bind its ports before applying firewall rules.
+# Without this, there's a window where iptables redirects to a port nobody is listening on.
+PROXY_READY=false
+for i in $(seq 1 10); do
+    if pgrep -u sniproxy python3 >/dev/null 2>&1; then
+        PROXY_READY=true
+        break
+    fi
+    sleep 0.5
+done
+
+if [ "$PROXY_READY" = true ]; then
     echo "[SANDBOX] Proxy started (HTTPS=3129, HTTP=3128)"
 else
-    echo "[SANDBOX] WARNING: Proxy failed to start"
+    write_error "proxy_failed" "Network proxy failed to start — aborting for security"
 fi
 
 # ── iptables NAT: redirect outbound HTTP/HTTPS to proxy ───────
@@ -86,9 +96,20 @@ iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A OUTPUT -d 127.0.0.1/32 -p tcp --dport 3129 -j ACCEPT
 iptables -A OUTPUT -d 127.0.0.1/32 -p tcp --dport 3128 -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-# DNS
-iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+# DNS — only allow queries to the container's configured resolver.
+# Open DNS (to any IP) would allow DNS tunneling for data exfiltration.
+NAMESERVER=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)
+if [ -n "$NAMESERVER" ]; then
+    iptables -A OUTPUT -d "$NAMESERVER" -p udp --dport 53 -j ACCEPT
+    iptables -A OUTPUT -d "$NAMESERVER" -p tcp --dport 53 -j ACCEPT
+else
+    # Fallback: allow DNS to Docker's default resolver only
+    iptables -A OUTPUT -d 127.0.0.11 -p udp --dport 53 -j ACCEPT
+    iptables -A OUTPUT -d 127.0.0.11 -p tcp --dport 53 -j ACCEPT
+fi
+# Block all other DNS (prevents DNS tunneling to attacker-controlled servers)
+iptables -A OUTPUT -p udp --dport 53 -j DROP
+iptables -A OUTPUT -p tcp --dport 53 -j DROP
 # Block cloud metadata endpoint (prevents IAM credential theft)
 iptables -A OUTPUT -d 169.254.0.0/16 -j DROP
 # Block private networks (prevents lateral movement)
@@ -97,8 +118,15 @@ iptables -A OUTPUT -d 172.16.0.0/12 -j DROP
 iptables -A OUTPUT -d 192.168.0.0/16 -j DROP
 # Allow proxy user to connect to whitelisted servers
 iptables -A OUTPUT -m owner --uid-owner sniproxy -j ACCEPT
-# Drop everything else
-iptables -A OUTPUT -p tcp -j DROP
+# Drop ALL remaining traffic (TCP, UDP, ICMP — everything)
+iptables -A OUTPUT -j DROP
+
+# ── IPv6: block all outbound (IPv4 rules don't cover IPv6) ────
+if command -v ip6tables >/dev/null 2>&1; then
+    ip6tables -A OUTPUT -o lo -j ACCEPT
+    ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    ip6tables -A OUTPUT -j DROP
+fi
 
 echo "[SANDBOX] Firewall active — only whitelisted domains reachable"
 

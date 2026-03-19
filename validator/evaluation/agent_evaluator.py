@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Optional, Any
@@ -26,6 +27,7 @@ from nepher_core.utils.helpers import (
     unzip_file,
     clean_directory,
     zip_directory,
+    run_command_async,
 )
 from nepher_core.utils.logging import get_logger
 from validator.evaluation.sandbox import SandboxRunner, SandboxError

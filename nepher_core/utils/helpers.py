@@ -115,20 +115,40 @@ def unzip_file(
     output_dir: Path,
 ) -> Path:
     """
-    Extract a ZIP archive.
-    
+    Extract a ZIP archive safely.
+
+    Validates every member path to prevent ZIP slip (path traversal) attacks
+    and rejects symlinks that could escape the output directory.
+
     Args:
         archive_path: Path to ZIP file
         output_dir: Directory to extract to
-        
+
     Returns:
         Path to extraction directory
+
+    Raises:
+        ValueError: If the archive contains path traversal or symlink entries.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+    resolved_output = output_dir.resolve()
+
     with zipfile.ZipFile(archive_path, "r") as zf:
+        for info in zf.infolist():
+            # Reject entries with absolute paths or parent-directory traversal
+            member_path = (output_dir / info.filename).resolve()
+            if not str(member_path).startswith(str(resolved_output) + "/") and member_path != resolved_output:
+                raise ValueError(
+                    f"Zip slip detected: '{info.filename}' escapes target directory"
+                )
+            # Reject symlinks (external_attr high byte 0xA0 = symlink on Unix)
+            if (info.external_attr >> 16) & 0xF000 == 0xA000:
+                raise ValueError(
+                    f"Symlink in archive rejected: '{info.filename}'"
+                )
+
         zf.extractall(output_dir)
-    
+
     logger.info(f"Extracted archive to: {output_dir}")
     return output_dir
 
