@@ -36,9 +36,10 @@ logger = get_logger(__name__)
 class EvaluationError(Exception):
     """Raised when evaluation fails."""
 
-    def __init__(self, message: str, recoverable: bool = True):
+    def __init__(self, message: str, recoverable: bool = True, log_output: str = ""):
         self.message = message
         self.recoverable = recoverable
+        self.log_output = log_output
         super().__init__(message)
 
 
@@ -114,7 +115,7 @@ class AgentEvaluator:
             raise
         except SandboxError as e:
             logger.error(f"Sandbox evaluation failed: {e}")
-            raise EvaluationError(str(e), recoverable=e.recoverable)
+            raise EvaluationError(str(e), recoverable=e.recoverable, log_output=e.log_output)
         except Exception as e:
             logger.error(f"Evaluation failed: {e}")
             raise EvaluationError(str(e), recoverable=True)
