@@ -928,3 +928,29 @@ class TournamentAPI:
         except Exception as e:
             logger.warning(f"Failed to report weight commit: {e}")
 
+    # =========================================================================
+    # Whitelist Endpoints
+    # =========================================================================
+
+    async def get_whitelist_domains(self) -> list[str]:
+        """Fetch active whitelisted domains for sandbox network filtering.
+
+        Returns a list of domain strings. On failure, returns an empty list
+        so that sandbox evaluation can still proceed with fallback defaults.
+
+        Endpoint: GET /api/v1/admin/whitelist/domains
+        """
+        try:
+            response = await self._request("GET", "/api/v1/admin/whitelist/domains")
+            data = response.json()
+            domains = [
+                item["domain"]
+                for item in data.get("items", [])
+                if item.get("is_active")
+            ]
+            logger.info(f"Fetched {len(domains)} whitelist domains: {domains}")
+            return domains
+        except Exception as e:
+            logger.warning(f"Failed to fetch whitelist domains: {e}")
+            return []
+

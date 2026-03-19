@@ -1,17 +1,8 @@
 """
 Sandbox container runner for isolated agent evaluation.
 
-Spawns a Docker container (nepher-sandbox) to run untrusted miner agent code
-in complete isolation. The sandbox container has:
-  - GPU access (for Isaac Sim evaluation)
-  - NO wallet access
-  - NO Docker socket access
-  - NO host network access
-  - Dropped Linux capabilities
-  - Read-only agent files
-  - Write access only to output directory
+Spawns a Docker container (nepher-sandbox) to run miner agent code in complete isolation. 
 
-This protects the validator's wallet and sensitive data from malicious agents.
 """
 
 import asyncio
@@ -125,6 +116,7 @@ class SandboxRunner:
         eval_config_path: Path,
         task_module: str,
         timeout: int = 3600,
+        whitelist_domains: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """
         Run agent evaluation in an isolated sandbox container.
@@ -138,6 +130,8 @@ class SandboxRunner:
             eval_config_path: Path to eval_config.yaml
             task_module: Name of the task module to install
             timeout: Evaluation timeout in seconds
+            whitelist_domains: Domains the sandbox proxy should allow.
+                If empty/None, the entrypoint falls back to built-in defaults.
 
         Returns:
             Evaluation result dict with score, metadata, summary
@@ -170,6 +164,7 @@ class SandboxRunner:
                 output_dir=output_dir,
                 task_module=task_module,
                 timeout=timeout,
+                whitelist_domains=whitelist_domains,
             )
 
             logger.info(
@@ -246,6 +241,7 @@ class SandboxRunner:
         output_dir: Path,
         task_module: str,
         timeout: int,
+        whitelist_domains: Optional[list[str]] = None,
     ) -> list[str]:
         """Build the `docker run` command with security restrictions."""
 
@@ -265,14 +261,15 @@ class SandboxRunner:
             "--rm",
             # Container name for tracking/cleanup
             "--name", container_name,
-            # ── Security restrictions ──
-            # Drop all Linux capabilities, then add back only what Isaac Sim
-            # needs: DAC_READ_SEARCH is required to follow the _isaac_sim
-            # symlink across directories.
+            # ── Security: Linux capabilities ──
+            # Drop everything, then add back only what the entrypoint needs.
+            # All added capabilities are dropped via capsh before miner code runs.
             "--cap-drop", "ALL",
-            "--cap-add", "DAC_READ_SEARCH",
-            # No new privileges (prevent setuid/setgid escalation)
-            "--security-opt", "no-new-privileges:true",
+            "--cap-add", "DAC_READ_SEARCH",  # Isaac Sim _isaac_sim symlink resolution
+            "--cap-add", "NET_ADMIN",         # iptables firewall setup (dropped before eval)
+            "--cap-add", "SETUID",            # su to sniproxy user for proxy process
+            "--cap-add", "SETGID",            # su to sniproxy user for proxy process
+            "--cap-add", "SETPCAP",           # capsh needs this to drop caps before eval
             # Resource limits
             "--memory", self.memory_limit,
             "--shm-size", self.shm_size,
@@ -291,6 +288,9 @@ class SandboxRunner:
             # Tell the nepher library where the environment cache is.
             # The entrypoint symlinks /sandbox/envs → /root/.cache/nepher.
             "-e", "NEPHER_CACHE_DIR=/root/.cache/nepher",
+            # Network whitelist — comma-separated domains for the sandbox proxy.
+            # Fetched from the tournament API; entrypoint falls back to defaults if empty.
+            "-e", f"SANDBOX_WHITELIST={','.join(whitelist_domains or [])}",
             # ── Volume mounts (using HOST paths for DinD) ──
             # Agent files (READ-ONLY — cannot modify or escape)
             "-v", f"{host_agent}:/sandbox/agent:ro",

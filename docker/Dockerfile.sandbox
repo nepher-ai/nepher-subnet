@@ -3,7 +3,7 @@
 # Based on Isaac Sim for GPU evaluation capability.
 #
 # SECURITY: This container runs with:
-#   - No wallet access
+#   - No data access
 #   - No Docker socket access
 #   - Dropped capabilities (except DAC_READ_SEARCH for symlink resolution)
 #   - Agent code is volume-mounted, evaluated, and results written to output volume
@@ -27,13 +27,22 @@ USER root
 WORKDIR /app
 
 # Install system dependencies
+# + iptables for network firewall + libcap2-bin for dropping capabilities
 RUN mkdir -p /var/lib/apt/lists/partial \
     && apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     python3 \
+    iptables \
+    libcap2-bin \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
+
+# Transparent domain-filtering proxy (no TLS termination, no certificates)
+# Runs as a dedicated user so iptables can exempt its outbound connections.
+COPY docker/sni-proxy.py /usr/local/bin/sni-proxy.py
+RUN chmod +x /usr/local/bin/sni-proxy.py \
+    && useradd --system --no-create-home --shell /usr/sbin/nologin sniproxy
 
 # Clone Isaac Lab and install
 RUN git clone --depth 1 --branch v2.3.2 https://github.com/isaac-sim/IsaacLab.git ${ISAACLAB_PATH} \
@@ -63,6 +72,9 @@ RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir prettytable
 # Install nepher (envhub) for environment loading
 RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir nepher
 
+# Install dependencies for Issac Lab Extension
+RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir hidapi
+
 # Clone eval-nav repository (URL is configurable via build arg)
 ARG EVAL_REPO_URL=https://github.com/nepher-ai/eval-nav.git
 RUN git clone ${EVAL_REPO_URL} /app/eval-nav \
@@ -83,7 +95,7 @@ RUN mkdir -p /isaac-sim/kit/data /isaac-sim/kit/cache/DerivedDataCache \
 # /sandbox/output  — evaluation results written here (mounted writable)
 # /sandbox/config  — eval config mounted here (read-only)
 # /sandbox/envs    — environment cache mounted here (read-only)
-RUN mkdir -p /sandbox/agent /sandbox/output /sandbox/config /sandbox/envs /sandbox/workspace
+RUN mkdir -p /sandbox/agent /sandbox/output /sandbox/config /sandbox/envs
 
 # Copy sandbox entrypoint
 COPY docker/entrypoint-sandbox.sh /entrypoint-sandbox.sh

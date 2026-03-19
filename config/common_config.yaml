@@ -14,7 +14,7 @@ tournament:
 
 # Isaac Lab/Sim version requirements
 isaac:
-  lab_version: "2.3.0"
+  lab_version: "2.3.2"
   sim_version: "5.1"
 
 # Paths configuration
@@ -37,6 +37,6 @@ retry:
   evaluation_timeout_seconds: 1800   # 30 minutes per agent
 
   # Weight setting retries
-  weight_setting_max_attempts: 2
+  weight_setting_max_attempts: 8
   weight_setting_initial_delay: 5.0
 

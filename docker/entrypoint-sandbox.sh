@@ -1,7 +1,14 @@
 #!/bin/bash
 # Nepher Sandbox Entrypoint
 #
-# Single-phase execution: install agent module, then run evaluation.
+# Runs untrusted miner agent code in isolation with network filtering.
+#
+# Network security (transparent proxy + iptables):
+#   1. Start domain-filtering proxy (SNI for HTTPS, Host header for HTTP)
+#   2. iptables NAT redirects ALL outbound HTTP/HTTPS → proxy
+#   3. iptables blocks ALL direct outbound (only proxy can reach internet)
+#   4. Drop NET_ADMIN capability so miner code cannot modify firewall
+#   5. Run evaluation — only whitelisted domains are reachable
 #
 # Expected mounts:
 #   /sandbox/agent   — extracted agent files (read-only)
@@ -43,6 +50,58 @@ fi
 echo "[SANDBOX] GPU OK:"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
+# ── Network firewall (transparent proxy + iptables) ────────────
+echo "[SANDBOX] Setting up network firewall..."
+
+# Whitelist: only these domains are reachable from the sandbox.
+# Fetched from the tournament API and passed via SANDBOX_WHITELIST env var.
+# Fallback to built-in defaults if not set (e.g. during manual testing).
+DEFAULT_WHITELIST=""
+SNI_WHITELIST="${SANDBOX_WHITELIST:-$DEFAULT_WHITELIST}"
+
+# Start the domain-filtering proxy as a dedicated user (sniproxy).
+# Running as a separate UID lets iptables exempt the proxy's own outbound
+# connections from being redirected back to itself.
+echo "[SANDBOX] Starting proxy (whitelist: ${SNI_WHITELIST})..."
+su -s /bin/sh sniproxy -c \
+    "python3 /usr/local/bin/sni-proxy.py --https-port 3129 --http-port 3128 \
+     --whitelist '${SNI_WHITELIST}'" &
+sleep 1
+
+if pgrep -u sniproxy python3 >/dev/null 2>&1; then
+    echo "[SANDBOX] Proxy started (HTTPS=3129, HTTP=3128)"
+else
+    echo "[SANDBOX] WARNING: Proxy failed to start"
+fi
+
+# ── iptables NAT: redirect outbound HTTP/HTTPS to proxy ───────
+# Skip redirect for the proxy's own outbound connections (uid sniproxy)
+iptables -t nat -A OUTPUT -m owner --uid-owner sniproxy -j RETURN
+iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 3129
+iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 3128
+
+# ── iptables filter: restrict what can reach the network ───────
+iptables -A OUTPUT -o lo -j ACCEPT
+# Allow NAT-redirected packets to reach the proxy
+iptables -A OUTPUT -d 127.0.0.1/32 -p tcp --dport 3129 -j ACCEPT
+iptables -A OUTPUT -d 127.0.0.1/32 -p tcp --dport 3128 -j ACCEPT
+iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+# DNS
+iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+# Block cloud metadata endpoint (prevents IAM credential theft)
+iptables -A OUTPUT -d 169.254.0.0/16 -j DROP
+# Block private networks (prevents lateral movement)
+iptables -A OUTPUT -d 10.0.0.0/8 -j DROP
+iptables -A OUTPUT -d 172.16.0.0/12 -j DROP
+iptables -A OUTPUT -d 192.168.0.0/16 -j DROP
+# Allow proxy user to connect to whitelisted servers
+iptables -A OUTPUT -m owner --uid-owner sniproxy -j ACCEPT
+# Drop everything else
+iptables -A OUTPUT -p tcp -j DROP
+
+echo "[SANDBOX] Firewall active — only whitelisted domains reachable"
+
 # ── Link environment cache ─────────────────────────────────────
 if [ -d /sandbox/envs ] && [ "$(ls -A /sandbox/envs 2>/dev/null)" ]; then
     echo "[SANDBOX] Linking environment cache..."
@@ -55,7 +114,6 @@ find /app -name "evaluation_result.json" -delete 2>/dev/null || true
 rm -f /sandbox/output/evaluation_result.json
 
 # ── Copy agent to writable location ───────────────────────────
-# /sandbox/agent is read-only; we need a writable copy for pip install -e
 echo "[SANDBOX] Copying agent to /app/agent..."
 cp -r /sandbox/agent /app/agent
 
@@ -91,13 +149,22 @@ if [ ! -f "$EVAL_CONFIG" ]; then
 fi
 
 echo "[SANDBOX] Running evaluation (timeout: ${EVAL_TIMEOUT}s)..."
+echo "[SANDBOX] Dropping capabilities — firewall is now immutable"
 
+# Python multiprocessing bootstrap: force 'spawn' start method (required by
+# Isaac Sim) and re-route argv so that the eval script runs as __main__.
 BOOTSTRAP="import multiprocessing, sys; multiprocessing.set_start_method('spawn', force=True); sys.argv = sys.argv[1:]; import runpy; runpy.run_path(sys.argv[0], run_name='__main__')"
 
-timeout "${EVAL_TIMEOUT}" ${ISAACLAB_PATH}/isaaclab.sh -p -c "$BOOTSTRAP" \
-    "$EVAL_SCRIPT" \
-    --config "$EVAL_CONFIG" \
-    --headless 2>&1
+# Drop capabilities so miner code cannot:
+#   - modify iptables rules  (NET_ADMIN)
+#   - re-grant capabilities  (SETPCAP)
+#   - switch uid/gid         (SETUID/SETGID)
+capsh --drop=cap_net_admin,cap_setpcap,cap_setuid,cap_setgid -- -c "
+    timeout ${EVAL_TIMEOUT} ${ISAACLAB_PATH}/isaaclab.sh -p -c \"${BOOTSTRAP}\" \
+        \"${EVAL_SCRIPT}\" \
+        --config \"${EVAL_CONFIG}\" \
+        --headless 2>&1
+"
 
 EVAL_EXIT=$?
 
@@ -115,7 +182,6 @@ if [ $EVAL_EXIT -ne 0 ]; then
 fi
 
 # ── Collect results ────────────────────────────────────────────
-# eval-nav writes evaluation_result.json to cwd or log dir; find it wherever it is
 if [ ! -f /sandbox/output/evaluation_result.json ]; then
     FOUND=$(find /app -name "evaluation_result.json" -type f 2>/dev/null | head -1)
     if [ -n "$FOUND" ]; then
@@ -124,7 +190,7 @@ if [ ! -f /sandbox/output/evaluation_result.json ]; then
     fi
 fi
 
-# Also copy the full log directory to output for the validator
+# Copy eval logs to output for the validator
 LOG_DIR=$(find /app/logs -mindepth 2 -maxdepth 2 -type d -name "eval_run_*" 2>/dev/null | sort | tail -1)
 if [ -n "$LOG_DIR" ]; then
     echo "[SANDBOX] Copying eval logs from: ${LOG_DIR}"
