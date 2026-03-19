@@ -55,9 +55,10 @@ services:
       args:
         - EVAL_REPO_URL=${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}
     image: nepher-sandbox:latest
-    # This service is never started directly — it only exists to build the image.
-    profiles:
-      - build-only
+    # This service is never started directly — it only exists so `docker compose build`
+    # creates the image. The entrypoint immediately exits, and restart is disabled.
+    entrypoint: ["echo", "sandbox image built — this service does not run"]
+    restart: "no"
 
   # =========================================================================
   # Validator Service (Lightweight Orchestrator - Docker-in-Docker)
@@ -69,8 +70,7 @@ services:
       dockerfile: docker/Dockerfile.validator
     depends_on:
       sandbox:
-        condition: service_started
-        required: false
+        condition: service_completed_successfully
     volumes:
       # Docker socket — required to spawn sandbox containers
       - /var/run/docker.sock:/var/run/docker.sock
