@@ -272,12 +272,16 @@ class AgentEvaluator:
 
         timeout = self.config.retry.evaluation_timeout_seconds
 
+        # Fetch whitelisted domains for sandbox network proxy
+        whitelist_domains = await self.api.get_whitelist_domains()
+
         # Run in sandbox
         result = await self.sandbox.run_evaluation(
             agent_registry=self.registry_path,
             eval_config_path=eval_config_path,
             task_module=task_module,
             timeout=timeout,
+            whitelist_domains=whitelist_domains,
         )
 
         # Save result to canonical location for log archiving
@@ -310,7 +314,6 @@ class AgentEvaluator:
             )
         finally:
             if log_file:
-                logger.info(f"submitted evaluation results {log_file}")
                 log_file.unlink(missing_ok=True)
 
     def _create_log_archive(self, log_dir: Optional[str]) -> Optional[Path]:

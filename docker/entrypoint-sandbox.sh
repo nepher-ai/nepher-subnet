@@ -3,10 +3,10 @@
 #
 # Runs untrusted miner agent code in isolation with network filtering.
 #
-# Network security (transparent proxy):
-#   1. Start squid transparent proxy (SNI-based domain whitelist)
-#   2. iptables NAT redirects ALL outbound HTTPS → squid
-#   3. iptables blocks ALL direct outbound (only squid can reach internet)
+# Network security (transparent proxy + iptables):
+#   1. Start domain-filtering proxy (SNI for HTTPS, Host header for HTTP)
+#   2. iptables NAT redirects ALL outbound HTTP/HTTPS → proxy
+#   3. iptables blocks ALL direct outbound (only proxy can reach internet)
 #   4. Drop NET_ADMIN capability so miner code cannot modify firewall
 #   5. Run evaluation — only whitelisted domains are reachable
 #
@@ -53,37 +53,52 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 # ── Network firewall (transparent proxy + iptables) ────────────
 echo "[SANDBOX] Setting up network firewall..."
 
-# Start squid transparent proxy
-squid -f /etc/squid/squid.conf 2>/dev/null
+# Whitelist: only these domains are reachable from the sandbox.
+# Fetched from the tournament API and passed via SANDBOX_WHITELIST env var.
+# Fallback to built-in defaults if not set (e.g. during manual testing).
+DEFAULT_WHITELIST=""
+SNI_WHITELIST="${SANDBOX_WHITELIST:-$DEFAULT_WHITELIST}"
+
+# Start the domain-filtering proxy as a dedicated user (sniproxy).
+# Running as a separate UID lets iptables exempt the proxy's own outbound
+# connections from being redirected back to itself.
+echo "[SANDBOX] Starting proxy (whitelist: ${SNI_WHITELIST})..."
+su -s /bin/sh sniproxy -c \
+    "python3 /usr/local/bin/sni-proxy.py --https-port 3129 --http-port 3128 \
+     --whitelist '${SNI_WHITELIST}'" &
 sleep 1
 
-if squid -f /etc/squid/squid.conf -k check 2>/dev/null; then
-    echo "[SANDBOX] Squid proxy started"
+if pgrep -u sniproxy python3 >/dev/null 2>&1; then
+    echo "[SANDBOX] Proxy started (HTTPS=3129, HTTP=3128)"
 else
-    echo "[SANDBOX] WARNING: Squid failed to start, continuing without proxy"
+    echo "[SANDBOX] WARNING: Proxy failed to start"
 fi
 
-# iptables: redirect all outbound HTTPS/HTTP to squid intercept ports
-# Skip redirect for squid's own connections (uid proxy) to avoid loop
-iptables -t nat -A OUTPUT -m owner --uid-owner proxy -j RETURN
+# ── iptables NAT: redirect outbound HTTP/HTTPS to proxy ───────
+# Skip redirect for the proxy's own outbound connections (uid sniproxy)
+iptables -t nat -A OUTPUT -m owner --uid-owner sniproxy -j RETURN
 iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 3129
 iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 3128
 
-# iptables OUTPUT: allow only squid to reach the internet directly
+# ── iptables filter: restrict what can reach the network ───────
 iptables -A OUTPUT -o lo -j ACCEPT
+# Allow NAT-redirected packets to reach the proxy
+iptables -A OUTPUT -d 127.0.0.1/32 -p tcp --dport 3129 -j ACCEPT
+iptables -A OUTPUT -d 127.0.0.1/32 -p tcp --dport 3128 -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+# DNS
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
-# Block cloud metadata endpoint (critical — prevents IAM credential theft)
+# Block cloud metadata endpoint (prevents IAM credential theft)
 iptables -A OUTPUT -d 169.254.0.0/16 -j DROP
-# Block private networks (prevent lateral movement)
+# Block private networks (prevents lateral movement)
 iptables -A OUTPUT -d 10.0.0.0/8 -j DROP
 iptables -A OUTPUT -d 172.16.0.0/12 -j DROP
 iptables -A OUTPUT -d 192.168.0.0/16 -j DROP
-# Allow squid (proxy user) to make direct connections
-iptables -A OUTPUT -m owner --uid-owner proxy -j ACCEPT
+# Allow proxy user to connect to whitelisted servers
+iptables -A OUTPUT -m owner --uid-owner sniproxy -j ACCEPT
 # Drop everything else
-iptables -A OUTPUT -j DROP
+iptables -A OUTPUT -p tcp -j DROP
 
 echo "[SANDBOX] Firewall active — only whitelisted domains reachable"
 
@@ -121,7 +136,7 @@ ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-build-isolation --no-deps -e
     write_error "install_failed" "Task module installation failed"
 }
 
-# ── Run evaluation (with NET_ADMIN dropped) ────────────────────
+# ── Run evaluation ─────────────────────────────────────────────
 EVAL_SCRIPT="/app/eval-nav/scripts/evaluate.py"
 EVAL_CONFIG="/sandbox/config/eval_config.yaml"
 EVAL_TIMEOUT=${EVAL_TIMEOUT:-3600}
@@ -134,12 +149,17 @@ if [ ! -f "$EVAL_CONFIG" ]; then
 fi
 
 echo "[SANDBOX] Running evaluation (timeout: ${EVAL_TIMEOUT}s)..."
-echo "[SANDBOX] Dropping NET_ADMIN capability — firewall is now immutable"
+echo "[SANDBOX] Dropping capabilities — firewall is now immutable"
 
+# Python multiprocessing bootstrap: force 'spawn' start method (required by
+# Isaac Sim) and re-route argv so that the eval script runs as __main__.
 BOOTSTRAP="import multiprocessing, sys; multiprocessing.set_start_method('spawn', force=True); sys.argv = sys.argv[1:]; import runpy; runpy.run_path(sys.argv[0], run_name='__main__')"
 
-# capsh --drop=cap_net_admin: miner code cannot modify iptables rules
-capsh --drop=cap_net_admin -- -c "
+# Drop capabilities so miner code cannot:
+#   - modify iptables rules  (NET_ADMIN)
+#   - re-grant capabilities  (SETPCAP)
+#   - switch uid/gid         (SETUID/SETGID)
+capsh --drop=cap_net_admin,cap_setpcap,cap_setuid,cap_setgid -- -c "
     timeout ${EVAL_TIMEOUT} ${ISAACLAB_PATH}/isaaclab.sh -p -c \"${BOOTSTRAP}\" \
         \"${EVAL_SCRIPT}\" \
         --config \"${EVAL_CONFIG}\" \
