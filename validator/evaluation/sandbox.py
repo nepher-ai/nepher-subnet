@@ -29,9 +29,10 @@ DEFAULT_PIDS_LIMIT = 4096
 class SandboxError(Exception):
     """Raised when sandbox execution fails."""
 
-    def __init__(self, message: str, recoverable: bool = True):
+    def __init__(self, message: str, recoverable: bool = True, log_output: str = ""):
         self.message = message
         self.recoverable = recoverable
+        self.log_output = log_output
         super().__init__(message)
 
 
@@ -178,19 +179,30 @@ class SandboxRunner:
                 cmd, timeout=container_timeout
             )
 
+            # Combine sandbox output for logging and error reporting
+            sandbox_log = stdout or ""
+            if stderr:
+                sandbox_log += "\n--- stderr ---\n" + stderr
+
             if stdout:
                 logger.info(f"Sandbox stdout (last 2000 chars):\n{stdout[-2000:]}")
             if stderr:
                 logger.warning(f"Sandbox stderr (last 2000 chars):\n{stderr[-2000:]}")
 
             # Collect result from output directory
-            result = self._collect_result(output_dir)
+            try:
+                result = self._collect_result(output_dir)
+            except SandboxError as e:
+                # Attach sandbox output to the error for reporting
+                e.log_output = sandbox_log
+                raise
 
             if returncode != 0:
                 logger.warning(f"Sandbox container exited with code {returncode}")
                 if result.get("metadata", {}).get("error"):
                     raise SandboxError(
-                        f"Sandbox evaluation failed: {result.get('summary', 'unknown error')}"
+                        f"Sandbox evaluation failed: {result.get('summary', 'unknown error')}",
+                        log_output=sandbox_log,
                     )
 
             return result
