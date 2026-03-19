@@ -145,7 +145,7 @@ class EvaluationOrchestrator:
             except EvaluationError as e:
                 logger.error(f"Evaluation failed for agent {agent.id}: {e.message}")
                 self._failed_count += 1
-                
+
                 try:
                     await self.api.submit_failed_evaluation(
                         tournament_id=tournament.id,
@@ -157,12 +157,38 @@ class EvaluationOrchestrator:
                     raise
                 except Exception as submit_error:
                     logger.error(f"Failed to submit failure: {submit_error}")
+
+                # Report the error to the tournament backend for review.
+                # Use the full sandbox log output if available, otherwise fall back to the error message.
+                log_content = e.log_output if e.log_output else e.message
+                await self.api.report_agent(
+                    tournament_id=tournament.id,
+                    agent_id=agent.id,
+                    validator_hotkey=self.validator_hotkey,
+                    log_content=log_content,
+                    error_type=self._classify_error(log_content),
+                    summary=e.message[:500],
+                )
                     
             except Exception as e:
                 logger.error(f"Unexpected error evaluating agent {agent.id}: {e}")
                 self._failed_count += 1
             
             await asyncio.sleep(self.AGENT_DELAY)
+
+    @staticmethod
+    def _classify_error(message: str) -> str:
+        """Classify an error message into a report error_type."""
+        msg = message.lower()
+        if any(kw in msg for kw in ("connection", "timeout", "http", "requests.post", "upload", "urllib3")):
+            return "network_violation"
+        if any(kw in msg for kw in ("permission", "denied", "iptables", "capability")):
+            return "sandbox_escape"
+        if "timed out" in msg or "timeout" in msg:
+            return "timeout"
+        if any(kw in msg for kw in ("import", "module", "modulenotfounderror")):
+            return "import_error"
+        return "runtime_error"
 
     def reset_stats(self) -> None:
         """Reset evaluation statistics."""

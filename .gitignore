@@ -130,3 +130,4 @@ config/miner_config.yaml
 outputs/
 IsaacLab/
 
+data/

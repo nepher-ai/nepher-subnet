@@ -8,6 +8,7 @@ The central coordinator that manages the validator lifecycle:
 """
 
 import asyncio
+import os
 import time
 from pathlib import Path
 from typing import Optional

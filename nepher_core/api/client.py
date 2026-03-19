@@ -928,3 +928,74 @@ class TournamentAPI:
         except Exception as e:
             logger.warning(f"Failed to report weight commit: {e}")
 
+    # =========================================================================
+    # Report Endpoints
+    # =========================================================================
+
+    async def report_agent(
+        self,
+        tournament_id: str,
+        agent_id: str,
+        validator_hotkey: str,
+        log_content: str,
+        error_type: str,
+        summary: str,
+    ) -> None:
+        """Report suspicious or malicious agent behavior to the tournament backend.
+
+        Fire-and-forget: logs a warning on failure but never raises, so the
+        evaluation flow is never disrupted.
+
+        Args:
+            tournament_id: Tournament ID
+            agent_id: Agent ID
+            validator_hotkey: Validator's hotkey
+            log_content: Relevant log/traceback content
+            error_type: Category of the error (e.g. "network_violation", "runtime_error")
+            summary: Human-readable summary of the issue
+
+        Endpoint: POST /api/v1/reports
+        """
+        try:
+            await self._request(
+                "POST",
+                "/api/v1/reports",
+                json={
+                    "tournament_id": tournament_id,
+                    "agent_id": agent_id,
+                    "validator_hotkey": validator_hotkey,
+                    "log_content": log_content[-10000:],  # Truncate to last 10k chars
+                    "error_type": error_type,
+                    "summary": summary,
+                },
+            )
+            logger.info(f"Reported agent {agent_id}: {error_type} — {summary}")
+        except Exception as e:
+            logger.warning(f"Failed to report agent {agent_id}: {e}")
+
+    # =========================================================================
+    # Whitelist Endpoints
+    # =========================================================================
+
+    async def get_whitelist_domains(self) -> list[str]:
+        """Fetch active whitelisted domains for sandbox network filtering.
+
+        Returns a list of domain strings. On failure, returns an empty list
+        so that sandbox evaluation can still proceed with fallback defaults.
+
+        Endpoint: GET /api/v1/admin/whitelist/domains
+        """
+        try:
+            response = await self._request("GET", "/api/v1/admin/whitelist/domains")
+            data = response.json()
+            domains = [
+                item["domain"]
+                for item in data.get("items", [])
+                if item.get("is_active")
+            ]
+            logger.info(f"Fetched {len(domains)} whitelist domains: {domains}")
+            return domains
+        except Exception as e:
+            logger.warning(f"Failed to fetch whitelist domains: {e}")
+            return []
+

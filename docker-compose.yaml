@@ -1,8 +1,26 @@
 # Nepher Subnet Docker Compose Configuration
 #
+# Architecture:
+#   - validator:     Lightweight orchestrator (CPU) — downloads agents, spawns
+#                    sandbox containers, submits results, sets weights on-chain.
+#   - sandbox:       GPU container (Isaac Sim) — runs untrusted miner agent code
+#                    in complete isolation. NOT a long-running service; spawned
+#                    on-demand by the validator via Docker socket.
+#   - validator-cpu: Weights & burn only (no evaluation).
+#   - miner:         Agent submission.
+#
 # Usage:
-#   Miner:     docker-compose run miner submit --path /app/agent
-#   Validator: docker-compose up validator
+#   # Build all images:
+#   docker-compose build
+#
+#   # Run validator (orchestrator + sandbox):
+#   docker-compose up validator
+#
+#   # Run CPU-only validator (weights/burn):
+#   docker-compose up validator-cpu
+#
+#   # Submit agent:
+#   docker-compose run miner submit --path /app/agent
 
 services:
   # =========================================================================
@@ -26,59 +44,65 @@ services:
       - miner
 
   # =========================================================================
-  # Validator Service (GPU Required)
+  # Sandbox Image (GPU - Isaac Sim - Agent Evaluation)
+  # NOT a running service. Built here so `docker-compose build` creates it.
+  # The validator spawns sandbox containers on-demand via Docker socket.
+  # =========================================================================
+  sandbox:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sandbox
+      args:
+        - EVAL_REPO_URL=${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}
+    image: nepher-sandbox:latest
+    # This service is never started directly — it only exists to build the image.
+    profiles:
+      - build-only
+
+  # =========================================================================
+  # Validator Service (Lightweight Orchestrator - Docker-in-Docker)
+  # Downloads agents, spawns sandbox containers for evaluation, sets weights.
   # =========================================================================
   validator:
     build:
       context: .
       dockerfile: docker/Dockerfile.validator
-      args:
-        - EVAL_REPO_URL=${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}
-    # Explicit NVIDIA runtime (requires nvidia-container-toolkit).
-    # Works with all Docker Compose versions; the deploy.resources block
-    # below is the newer equivalent but is ignored by some older runtimes.
-    runtime: nvidia
+    depends_on:
+      sandbox:
+        condition: service_started
+        required: false
     volumes:
-      # Wallet access (only wallets dir, read-only; bittensor init creates
-      # other dirs like /root/.bittensor/miners which must be writable)
+      # Docker socket — required to spawn sandbox containers
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Wallet access (read-only)
       - ${BITTENSOR_WALLET_PATH:-~/.bittensor}/wallets:/root/.bittensor/wallets:ro
       # Configuration (read-only)
       - ./config:/app/config:ro
-      # Workspace (read-write for evaluation artifacts)
+      # Workspace (read-write for agent downloads, eval configs, results)
       - ./workspace:/app/workspace
-      # Environment cache (persistent)
-      - nepher-env-cache:/root/.cache/nepher
+      # Local agent ZIP for local evaluation (mount the project root for access)
+      - .:/app/project:ro
+      # Live-mount source code (no rebuild needed on code changes)
+      - ./nepher_core:/app/nepher_core:ro
+      - ./validator:/app/validator:ro
+      # Environment cache — validator downloads benchmarks here, sandbox reads them.
+      # Must be a bind mount (not a named volume) so the host path is known for DinD.
+      - ./data/env-cache:/root/.cache/nepher
       # Logs (optional, for debugging)
       - ./logs:/app/logs
-      # Isaac Sim cache volumes (persistent across container restarts)
-      - isaac-cache-kit:/isaac-sim/kit/cache
-      - isaac-cache-ov:/root/.cache/ov
-      - isaac-cache-pip:/root/.cache/pip
-      - isaac-cache-glcache:/root/.cache/nvidia/GLCache
-      - isaac-cache-compute:/root/.nv/ComputeCache
-      - isaac-logs:/root/.nvidia-omniverse/logs
-      - isaac-data:/root/.local/share/ov/data
     environment:
       - NEPHER_API_KEY=${NEPHER_API_KEY}
       - NEPHER_API_URL=${NEPHER_API_URL:-https://tournament-api.nepher.ai}
       - ENVHUB_API_URL=${ENVHUB_API_URL:-https://envhub-api.nepher.ai}
       - EVAL_REPO_URL=${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}
-      # Must match the nepher-env-cache volume mount so the nepher library
       - NEPHER_CACHE_DIR=/root/.cache/nepher
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
-      # Lazy CUDA module loading avoids eagerly grabbing driver state that
-      # would break multiprocessing workers using the 'fork' start method.
-      - CUDA_MODULE_LOADING=LAZY
-      - ACCEPT_EULA=Y
-      - PRIVACY_CONSENT=Y
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu, compute, utility]
+      # Sandbox image name (must match the image built above)
+      - SANDBOX_IMAGE=nepher-sandbox:latest
+      # Host-side path mapping for Docker-in-Docker volume mounts.
+      # The validator runs inside a container but spawns sandbox containers
+      # via the host Docker daemon, so -v paths must be HOST paths.
+      - HOST_WORKSPACE=${PWD}/workspace
+      - HOST_ENV_CACHE=${PWD}/data/env-cache
     networks:
       - nepher-net
     restart: unless-stopped
@@ -88,11 +112,11 @@ services:
         max-size: "100m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "bash", "-c", "/isaac-lab/isaaclab.sh -p -c 'import nepher_core; print(\"OK\")'"]
+      test: ["CMD", "python", "-c", "import nepher_core; print('OK')"]
       interval: 60s
-      timeout: 30s
+      timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 30s
 
   # =========================================================================
   # CPU Validator Service (No GPU — weights & burn only)
@@ -128,25 +152,3 @@ networks:
   nepher-net:
     driver: bridge
 
-# =========================================================================
-# Volumes
-# =========================================================================
-volumes:
-  # Persistent cache for downloaded environments
-  nepher-env-cache:
-    driver: local
-  # Isaac Sim cache volumes (improves startup time on subsequent runs)
-  isaac-cache-kit:
-    driver: local
-  isaac-cache-ov:
-    driver: local
-  isaac-cache-pip:
-    driver: local
-  isaac-cache-glcache:
-    driver: local
-  isaac-cache-compute:
-    driver: local
-  isaac-logs:
-    driver: local
-  isaac-data:
-    driver: local
