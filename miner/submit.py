@@ -74,11 +74,6 @@ def validate_agent_structure(agent_path: Path) -> Tuple[bool, List[str]]:
         subdirs = [d for d in source_dir.iterdir() if d.is_dir()]
         if not subdirs:
             errors.append("source/ directory must contain at least one task module")
-        else:
-            # Check for __init__.py in task module
-            for subdir in subdirs:
-                if not (subdir / "__init__.py").exists():
-                    errors.append(f"Task module missing __init__.py: source/{subdir.name}/")
     
     # Warn about missing recommended files
     for rel_path, item_type in RECOMMENDED_STRUCTURE.items():
