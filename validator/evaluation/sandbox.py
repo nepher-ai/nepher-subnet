@@ -286,9 +286,8 @@ class SandboxRunner:
             "--memory", self.memory_limit,
             "--shm-size", self.shm_size,
             "--pids-limit", str(DEFAULT_PIDS_LIMIT),
-            # ── GPU access ──
+            # ── GPU access (nvidia-container-toolkit; --gpus is enough; no separate --runtime) ──
             "--gpus", "all",
-            "--runtime", "nvidia",
             # ── Environment ──
             "-e", f"TASK_MODULE={task_module}",
             "-e", f"EVAL_TIMEOUT={timeout}",
