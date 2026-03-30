@@ -50,6 +50,83 @@ fi
 echo "[SANDBOX] GPU OK:"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
+# ── GPU driver library alignment ──────────────────────────────
+# The Isaac Sim base image bundles Vulkan/GL driver userspace libraries
+# at whatever version was current when the image was built (e.g. 535.32).
+# The NVIDIA Container Toolkit mounts the *host's* driver libraries into
+# the container, but if the bundled copies appear earlier on the library
+# search path the application (Omniverse Kit) sees the old version and
+# refuses to initialise the RTX renderer — which breaks camera sensors
+# and causes cryptic NumPy dtype errors ("kind=f, size=0").
+#
+# nvidia-smi always uses the host-mounted driver binary so it reports
+# the true host version.  We locate the matching host-mounted userspace
+# libs and ensure they are found first.
+_align_gpu_driver_libs() {
+    local host_ver
+    host_ver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null \
+               | head -1 | tr -d '[:space:]')
+    [ -z "$host_ver" ] && return 0
+
+    echo "[SANDBOX] Host GPU driver version: ${host_ver}"
+
+    # Find the directory where the toolkit placed host driver libraries.
+    local lib_dir=""
+    for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
+        if [ -f "${d}/libnvidia-glcore.so.${host_ver}" ]; then
+            lib_dir="$d"
+            break
+        fi
+    done
+
+    if [ -z "$lib_dir" ]; then
+        echo "[SANDBOX] Host driver libs not in standard paths — searching..."
+        local found
+        found=$(find /usr -maxdepth 5 -name "libnvidia-glcore.so.${host_ver}" 2>/dev/null | head -1)
+        [ -n "$found" ] && lib_dir=$(dirname "$found")
+    fi
+
+    if [ -z "$lib_dir" ]; then
+        echo "[SANDBOX] Warning: could not locate host driver ${host_ver} libraries"
+        echo "[SANDBOX] RTX rendering may fail if the bundled driver is too old"
+        return 0
+    fi
+
+    # Prepend host lib dir so the dynamic linker finds host libs first.
+    export LD_LIBRARY_PATH="${lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+    # Update .so / .so.1 symlinks for NVIDIA libraries so loaders that
+    # resolve via symlink (rather than LD_LIBRARY_PATH) also get the
+    # host version.
+    local lib base
+    for lib in "${lib_dir}"/lib*nvidia*.so."${host_ver}" \
+               "${lib_dir}"/libcuda.so."${host_ver}" \
+               "${lib_dir}"/libGLX_nvidia.so.0."${host_ver}"; do
+        [ -f "$lib" ] || continue
+        base="${lib%.${host_ver}}"
+        ln -sf "$lib" "$base" 2>/dev/null || true
+        # .so.1 links (libGLX_nvidia.so.0 already ends with .0)
+        if echo "$base" | grep -qv '\.so\.[0-9]'; then
+            ln -sf "$lib" "${base}.1" 2>/dev/null || true
+        fi
+    done
+
+    # Point Vulkan ICD manifests at the host driver version so the
+    # Vulkan loader picks up the correct libnvidia-vulkan-producer.
+    local icd
+    for icd in /usr/share/vulkan/icd.d/nvidia_icd*.json \
+               /etc/vulkan/icd.d/nvidia_icd*.json; do
+        [ -f "$icd" ] || continue
+        sed -i "s/libnvidia-vulkan-producer\.so\.[0-9.]*/libnvidia-vulkan-producer.so.${host_ver}/g" \
+            "$icd" 2>/dev/null || true
+    done
+
+    ldconfig 2>/dev/null || true
+    echo "[SANDBOX] GPU driver libs aligned → ${host_ver} (from ${lib_dir})"
+}
+
+_align_gpu_driver_libs
+
 # ── Network firewall (transparent proxy + iptables) ────────────
 echo "[SANDBOX] Setting up network firewall..."
 

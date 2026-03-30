@@ -284,6 +284,7 @@ nepher-validator run --config config/validator_config.yaml
 | **Evaluation timeout** | Override: `retry.evaluation_timeout_seconds: 7200` in `validator_config.yaml`. |
 | **Weight setting failures** | Auto-retries with backoff. Check: staked TAO, subnet 49 registration, chain connectivity. |
 | **Docker build fails** | `docker compose build --no-cache validator` — ensure ≥ 20 GB free disk (`df -h`). |
+| **RTX renderer / dtype error** | The sandbox reports `Unable to write from unknown dtype, kind=f, size=0` or `rtx driver verification failed`. This means the host GPU driver libraries aren't reaching the container. Update the NVIDIA Container Toolkit: `sudo apt install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`. The sandbox entrypoint auto-aligns driver libraries, but the toolkit must mount them first. Verify with: `docker run --rm --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all nepher-sandbox:latest bash -c "nvidia-smi \| head -3"`. |
 | **Hangs after startup** | Test API connectivity: `curl -sI https://tournament-api.nepher.ai/api/v1/tournaments/active`. If DNS fails, add `dns: ["8.8.8.8"]` to `docker-compose.yaml`. |
 
 ---
