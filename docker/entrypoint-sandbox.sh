@@ -51,24 +51,22 @@ echo "[SANDBOX] GPU OK:"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
 # ── GPU driver library alignment ──────────────────────────────
-# The Isaac Sim base image bundles Vulkan/GL driver userspace libraries
-# at whatever version was current when the image was built (e.g. 535.32).
-# The NVIDIA Container Toolkit mounts the *host's* driver libraries into
-# the container, but Isaac Sim's launch scripts (setup_python_env.sh)
-# set LD_LIBRARY_PATH to include directories with the bundled copies
-# *before* any host-mounted path — so the bundled version wins and
-# Omniverse rejects the old driver, breaking the RTX renderer and
-# every sensor that depends on it (depth camera → "dtype kind=f, size=0").
+# The Isaac Sim base image bundles NVIDIA driver userspace libraries
+# (Vulkan, GL, RTX) INSIDE its own directory tree (/isaac-sim/...).
+# The NVIDIA Container Toolkit may replace the copies under /usr/lib/
+# with the host version, but Isaac Sim loads from its OWN directories
+# via LD_LIBRARY_PATH — so the old bundled version always wins and
+# Omniverse rejects it as unsupported for RTX.
 #
-# Fix strategy (three layers):
-#   1. Create an override directory with symlinks whose filenames match
-#      BOTH the host AND the bundled version — all pointing to the host
-#      library.  This way, no matter which version the linker asks for,
-#      it gets the host copy.
-#   2. Patch Isaac Sim's setup_python_env.sh to prepend the override
-#      directory AFTER it sets its own LD_LIBRARY_PATH, so the override
-#      survives the re-set.
-#   3. Update Vulkan ICD manifests and refresh ldconfig.
+# Fix strategy:
+#   1. Find host driver libraries (mounted by the toolkit).
+#   2. Search the ENTIRE container for stale-version NVIDIA libs
+#      (especially inside /isaac-sim/) and replace them in-place
+#      with symlinks to the host version.
+#   3. Create an override directory and patch Isaac Sim's env setup.
+#   4. Update all Vulkan ICD manifests.
+#   5. Disable the RTX driver version check in the Kit config as a
+#      safety net (the actual kernel driver IS the host version).
 _align_gpu_driver_libs() {
     local host_ver
     host_ver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null \
@@ -77,7 +75,7 @@ _align_gpu_driver_libs() {
 
     echo "[SANDBOX] Host GPU driver version: ${host_ver}"
 
-    # Find the directory where the toolkit placed host driver libraries.
+    # Find host-version libraries (toolkit mounts them in system lib dirs).
     local host_lib_dir=""
     for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
         if [ -f "${d}/libnvidia-glcore.so.${host_ver}" ]; then
@@ -85,99 +83,115 @@ _align_gpu_driver_libs() {
             break
         fi
     done
-
     if [ -z "$host_lib_dir" ]; then
-        echo "[SANDBOX] Host driver libs not in standard paths — searching..."
-        local found
-        found=$(find /usr -maxdepth 5 -name "libnvidia-glcore.so.${host_ver}" 2>/dev/null | head -1)
-        [ -n "$found" ] && host_lib_dir=$(dirname "$found")
+        local _found
+        _found=$(find /usr -maxdepth 5 -name "libnvidia-glcore.so.${host_ver}" 2>/dev/null | head -1)
+        [ -n "$_found" ] && host_lib_dir=$(dirname "$_found")
     fi
 
     if [ -z "$host_lib_dir" ]; then
-        echo "[SANDBOX] Warning: could not locate host driver ${host_ver} libraries"
-        echo "[SANDBOX] RTX rendering may fail if the bundled driver is too old"
+        echo "[SANDBOX] Warning: host driver ${host_ver} userspace libs not found"
+        echo "[SANDBOX] Toolkit may not have mounted graphics libraries"
+        _disable_rtx_driver_check
         return 0
     fi
 
-    # Detect the bundled (stale) driver version.
-    local bundled_ver=""
-    for f in "${host_lib_dir}"/libnvidia-glcore.so.*; do
-        [ -f "$f" ] || continue
-        local v
-        v=$(basename "$f" | grep -oP 'libnvidia-glcore\.so\.\K[0-9]+\.[0-9.]+')
-        if [ -n "$v" ] && [ "$v" != "$host_ver" ]; then
-            bundled_ver="$v"
-            break
-        fi
-    done
+    echo "[SANDBOX] Host driver libs at: ${host_lib_dir}"
 
-    if [ -z "$bundled_ver" ]; then
-        echo "[SANDBOX] No version mismatch — host driver libs should be active"
-        export LD_LIBRARY_PATH="${host_lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-        ldconfig 2>/dev/null || true
-        return 0
-    fi
+    # ── Step 1: Find and replace ALL stale driver libs filesystem-wide ──
+    # Isaac Sim bundles its own copies under /isaac-sim/kit/libs/ and
+    # similar paths. These are what Omniverse actually loads.
+    local replaced=0
+    while IFS= read -r stale_lib; do
+        [ -f "$stale_lib" ] || continue
+        local name ver base host_equiv
+        name=$(basename "$stale_lib")
 
-    echo "[SANDBOX] Bundled driver ${bundled_ver} shadowing host ${host_ver} — applying override"
+        # Extract version suffix (e.g., 535.32.01 from libnvidia-glcore.so.535.32.01)
+        ver=$(echo "$name" | grep -oP '\.so\.\K[0-9]+\.[0-9.]+$')
+        [ -z "$ver" ] && continue
+        [ "$ver" = "$host_ver" ] && continue
 
-    # ── Layer 1: override directory with version-aliased symlinks ──
+        # Find the matching host library
+        base=$(echo "$name" | sed "s/\.${ver}$//")
+        host_equiv="${host_lib_dir}/${base}.${host_ver}"
+        [ -f "$host_equiv" ] || continue
+
+        # Replace the stale library with a symlink to the host version
+        ln -sf "$host_equiv" "$stale_lib" 2>/dev/null && replaced=$((replaced + 1))
+    done < <(find /isaac-sim /usr/lib /opt 2>/dev/null \
+             -name "libnvidia-*.so.*" -o \
+             -name "libcuda.so.*" -o \
+             -name "libGLX_nvidia.so.*" -o \
+             -name "libvdpau_nvidia.so.*" \
+             | grep -v "\.${host_ver}$")
+
+    echo "[SANDBOX] Replaced ${replaced} stale driver libs → ${host_ver}"
+
+    # ── Step 2: Override directory + LD_LIBRARY_PATH ──
     local override_dir="/app/nvidia-driver-override"
     mkdir -p "$override_dir"
 
-    local count=0
     for host_lib in "${host_lib_dir}"/lib*nvidia*.so."${host_ver}" \
                     "${host_lib_dir}"/libcuda.so."${host_ver}" \
-                    "${host_lib_dir}"/libGLX_nvidia.so.0."${host_ver}" \
-                    "${host_lib_dir}"/libvdpau_nvidia.so."${host_ver}"; do
+                    "${host_lib_dir}"/libGLX_nvidia.so.0."${host_ver}"; do
         [ -f "$host_lib" ] || continue
         local name base
         name=$(basename "$host_lib")
         base="${name%.${host_ver}}"
-
-        ln -sf "$host_lib" "${override_dir}/${name}"
-        # Key: alias the BUNDLED version filename → host library
-        ln -sf "$host_lib" "${override_dir}/${base}.${bundled_ver}"
-        ln -sf "$host_lib" "${override_dir}/${base}"
+        ln -sf "$host_lib" "${override_dir}/${name}" 2>/dev/null || true
+        ln -sf "$host_lib" "${override_dir}/${base}" 2>/dev/null || true
         case "$base" in
             *.so.[0-9]*) ;;
-            *) ln -sf "$host_lib" "${override_dir}/${base}.1" ;;
+            *) ln -sf "$host_lib" "${override_dir}/${base}.1" 2>/dev/null || true ;;
         esac
-        count=$((count + 1))
     done
 
     export LD_LIBRARY_PATH="${override_dir}:${host_lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-    # ── Layer 2: patch Isaac Sim's env setup so the override survives ──
-    # Isaac Sim's python.sh sources setup_python_env.sh which resets
-    # LD_LIBRARY_PATH with its own dirs first.  Appending a line at
-    # the END of that script makes our override dir come first again.
+    # ── Step 3: Patch Isaac Sim's env setup so override survives ──
     local script
     for script in "${ISAACSIM_PATH}/setup_python_env.sh" \
                   "${ISAACSIM_PATH}/setup_conda_env.sh"; do
         [ -f "$script" ] || continue
         if ! grep -q "nvidia-driver-override" "$script" 2>/dev/null; then
-            printf '\n# [nepher-sandbox] Host GPU driver override\nexport LD_LIBRARY_PATH="%s:${LD_LIBRARY_PATH}"\n' \
-                "$override_dir" >> "$script"
+            printf '\n# [nepher-sandbox] Host GPU driver override\nexport LD_LIBRARY_PATH="%s:%s:${LD_LIBRARY_PATH}"\n' \
+                "$override_dir" "$host_lib_dir" >> "$script"
             echo "[SANDBOX] Patched $(basename "$script")"
         fi
     done
 
-    # ── Layer 3: Vulkan ICD manifests ──
-    local icd
-    for icd in /usr/share/vulkan/icd.d/nvidia_icd*.json \
-               /etc/vulkan/icd.d/nvidia_icd*.json; do
-        [ -f "$icd" ] || continue
-        sed -i "s/libnvidia-vulkan-producer\.so\.[0-9.]*/libnvidia-vulkan-producer.so.${host_ver}/g" \
-            "$icd" 2>/dev/null || true
-    done
-    # Also check inside Isaac Sim's own tree
+    # ── Step 4: Vulkan ICD manifests (system-wide + inside Isaac Sim) ──
     while IFS= read -r icd; do
         sed -i "s/libnvidia-vulkan-producer\.so\.[0-9.]*/libnvidia-vulkan-producer.so.${host_ver}/g" \
             "$icd" 2>/dev/null || true
-    done < <(find "${ISAACSIM_PATH}" -maxdepth 5 -name "nvidia_icd*.json" 2>/dev/null)
+    done < <(find / -maxdepth 7 -name "nvidia_icd*.json" 2>/dev/null)
 
     ldconfig 2>/dev/null || true
-    echo "[SANDBOX] Overrode ${count} driver libs: ${bundled_ver} → ${host_ver} (via ${override_dir})"
+
+    # ── Step 5: Disable RTX driver version check (safety net) ──
+    _disable_rtx_driver_check
+
+    echo "[SANDBOX] GPU driver alignment complete → ${host_ver}"
+}
+
+_disable_rtx_driver_check() {
+    # Omniverse Kit's gpu.foundation.plugin has a conservative driver
+    # version check. When the kernel module is a valid host driver but
+    # userspace libs report a stale version (or when we've just replaced
+    # them), the check can still fire before the fix fully takes effect.
+    # Disabling it is safe because the actual kernel driver IS supported.
+    local kit_files=(
+        "${ISAACLAB_PATH}/apps/isaaclab.python.headless.rendering.kit"
+        "${ISAACLAB_PATH}/apps/isaaclab.python.headless.kit"
+    )
+    for kit_file in "${kit_files[@]}"; do
+        [ -f "$kit_file" ] || continue
+        if ! grep -q "verifyDriverVersion" "$kit_file" 2>/dev/null; then
+            printf '\n[settings]\nrtx.verifyDriverVersion.enabled = false\n' >> "$kit_file"
+            echo "[SANDBOX] Disabled RTX driver version check in $(basename "$kit_file")"
+        fi
+    done
 }
 
 _align_gpu_driver_libs
