@@ -54,14 +54,21 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 # The Isaac Sim base image bundles Vulkan/GL driver userspace libraries
 # at whatever version was current when the image was built (e.g. 535.32).
 # The NVIDIA Container Toolkit mounts the *host's* driver libraries into
-# the container, but if the bundled copies appear earlier on the library
-# search path the application (Omniverse Kit) sees the old version and
-# refuses to initialise the RTX renderer — which breaks camera sensors
-# and causes cryptic NumPy dtype errors ("kind=f, size=0").
+# the container, but Isaac Sim's launch scripts (setup_python_env.sh)
+# set LD_LIBRARY_PATH to include directories with the bundled copies
+# *before* any host-mounted path — so the bundled version wins and
+# Omniverse rejects the old driver, breaking the RTX renderer and
+# every sensor that depends on it (depth camera → "dtype kind=f, size=0").
 #
-# nvidia-smi always uses the host-mounted driver binary so it reports
-# the true host version.  We locate the matching host-mounted userspace
-# libs and ensure they are found first.
+# Fix strategy (three layers):
+#   1. Create an override directory with symlinks whose filenames match
+#      BOTH the host AND the bundled version — all pointing to the host
+#      library.  This way, no matter which version the linker asks for,
+#      it gets the host copy.
+#   2. Patch Isaac Sim's setup_python_env.sh to prepend the override
+#      directory AFTER it sets its own LD_LIBRARY_PATH, so the override
+#      survives the re-set.
+#   3. Update Vulkan ICD manifests and refresh ldconfig.
 _align_gpu_driver_libs() {
     local host_ver
     host_ver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null \
@@ -71,48 +78,91 @@ _align_gpu_driver_libs() {
     echo "[SANDBOX] Host GPU driver version: ${host_ver}"
 
     # Find the directory where the toolkit placed host driver libraries.
-    local lib_dir=""
+    local host_lib_dir=""
     for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
         if [ -f "${d}/libnvidia-glcore.so.${host_ver}" ]; then
-            lib_dir="$d"
+            host_lib_dir="$d"
             break
         fi
     done
 
-    if [ -z "$lib_dir" ]; then
+    if [ -z "$host_lib_dir" ]; then
         echo "[SANDBOX] Host driver libs not in standard paths — searching..."
         local found
         found=$(find /usr -maxdepth 5 -name "libnvidia-glcore.so.${host_ver}" 2>/dev/null | head -1)
-        [ -n "$found" ] && lib_dir=$(dirname "$found")
+        [ -n "$found" ] && host_lib_dir=$(dirname "$found")
     fi
 
-    if [ -z "$lib_dir" ]; then
+    if [ -z "$host_lib_dir" ]; then
         echo "[SANDBOX] Warning: could not locate host driver ${host_ver} libraries"
         echo "[SANDBOX] RTX rendering may fail if the bundled driver is too old"
         return 0
     fi
 
-    # Prepend host lib dir so the dynamic linker finds host libs first.
-    export LD_LIBRARY_PATH="${lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-    # Update .so / .so.1 symlinks for NVIDIA libraries so loaders that
-    # resolve via symlink (rather than LD_LIBRARY_PATH) also get the
-    # host version.
-    local lib base
-    for lib in "${lib_dir}"/lib*nvidia*.so."${host_ver}" \
-               "${lib_dir}"/libcuda.so."${host_ver}" \
-               "${lib_dir}"/libGLX_nvidia.so.0."${host_ver}"; do
-        [ -f "$lib" ] || continue
-        base="${lib%.${host_ver}}"
-        ln -sf "$lib" "$base" 2>/dev/null || true
-        # .so.1 links (libGLX_nvidia.so.0 already ends with .0)
-        if echo "$base" | grep -qv '\.so\.[0-9]'; then
-            ln -sf "$lib" "${base}.1" 2>/dev/null || true
+    # Detect the bundled (stale) driver version.
+    local bundled_ver=""
+    for f in "${host_lib_dir}"/libnvidia-glcore.so.*; do
+        [ -f "$f" ] || continue
+        local v
+        v=$(basename "$f" | grep -oP 'libnvidia-glcore\.so\.\K[0-9]+\.[0-9.]+')
+        if [ -n "$v" ] && [ "$v" != "$host_ver" ]; then
+            bundled_ver="$v"
+            break
         fi
     done
 
-    # Point Vulkan ICD manifests at the host driver version so the
-    # Vulkan loader picks up the correct libnvidia-vulkan-producer.
+    if [ -z "$bundled_ver" ]; then
+        echo "[SANDBOX] No version mismatch — host driver libs should be active"
+        export LD_LIBRARY_PATH="${host_lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        ldconfig 2>/dev/null || true
+        return 0
+    fi
+
+    echo "[SANDBOX] Bundled driver ${bundled_ver} shadowing host ${host_ver} — applying override"
+
+    # ── Layer 1: override directory with version-aliased symlinks ──
+    local override_dir="/app/nvidia-driver-override"
+    mkdir -p "$override_dir"
+
+    local count=0
+    for host_lib in "${host_lib_dir}"/lib*nvidia*.so."${host_ver}" \
+                    "${host_lib_dir}"/libcuda.so."${host_ver}" \
+                    "${host_lib_dir}"/libGLX_nvidia.so.0."${host_ver}" \
+                    "${host_lib_dir}"/libvdpau_nvidia.so."${host_ver}"; do
+        [ -f "$host_lib" ] || continue
+        local name base
+        name=$(basename "$host_lib")
+        base="${name%.${host_ver}}"
+
+        ln -sf "$host_lib" "${override_dir}/${name}"
+        # Key: alias the BUNDLED version filename → host library
+        ln -sf "$host_lib" "${override_dir}/${base}.${bundled_ver}"
+        ln -sf "$host_lib" "${override_dir}/${base}"
+        case "$base" in
+            *.so.[0-9]*) ;;
+            *) ln -sf "$host_lib" "${override_dir}/${base}.1" ;;
+        esac
+        count=$((count + 1))
+    done
+
+    export LD_LIBRARY_PATH="${override_dir}:${host_lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+    # ── Layer 2: patch Isaac Sim's env setup so the override survives ──
+    # Isaac Sim's python.sh sources setup_python_env.sh which resets
+    # LD_LIBRARY_PATH with its own dirs first.  Appending a line at
+    # the END of that script makes our override dir come first again.
+    local script
+    for script in "${ISAACSIM_PATH}/setup_python_env.sh" \
+                  "${ISAACSIM_PATH}/setup_conda_env.sh"; do
+        [ -f "$script" ] || continue
+        if ! grep -q "nvidia-driver-override" "$script" 2>/dev/null; then
+            printf '\n# [nepher-sandbox] Host GPU driver override\nexport LD_LIBRARY_PATH="%s:${LD_LIBRARY_PATH}"\n' \
+                "$override_dir" >> "$script"
+            echo "[SANDBOX] Patched $(basename "$script")"
+        fi
+    done
+
+    # ── Layer 3: Vulkan ICD manifests ──
     local icd
     for icd in /usr/share/vulkan/icd.d/nvidia_icd*.json \
                /etc/vulkan/icd.d/nvidia_icd*.json; do
@@ -120,9 +170,14 @@ _align_gpu_driver_libs() {
         sed -i "s/libnvidia-vulkan-producer\.so\.[0-9.]*/libnvidia-vulkan-producer.so.${host_ver}/g" \
             "$icd" 2>/dev/null || true
     done
+    # Also check inside Isaac Sim's own tree
+    while IFS= read -r icd; do
+        sed -i "s/libnvidia-vulkan-producer\.so\.[0-9.]*/libnvidia-vulkan-producer.so.${host_ver}/g" \
+            "$icd" 2>/dev/null || true
+    done < <(find "${ISAACSIM_PATH}" -maxdepth 5 -name "nvidia_icd*.json" 2>/dev/null)
 
     ldconfig 2>/dev/null || true
-    echo "[SANDBOX] GPU driver libs aligned → ${host_ver} (from ${lib_dir})"
+    echo "[SANDBOX] Overrode ${count} driver libs: ${bundled_ver} → ${host_ver} (via ${override_dir})"
 }
 
 _align_gpu_driver_libs
