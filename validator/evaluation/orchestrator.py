@@ -178,15 +178,27 @@ class EvaluationOrchestrator:
 
     @staticmethod
     def _classify_error(message: str) -> str:
-        """Classify an error message into a report error_type."""
+        """Classify an error message into a report error_type.
+
+        Keywords are intentionally specific to avoid false positives from
+        Isaac Lab config dumps that contain URLs (``https://…``) and
+        parameter names like ``timeout``.
+        """
         msg = message.lower()
-        if any(kw in msg for kw in ("connection", "timeout", "http", "requests.post", "upload", "urllib3")):
+        network_kw = (
+            "connectionerror", "connectionrefused", "connectionreset",
+            "requests.post", "requests.get", "urllib3",
+            "httpx.", "httperror", "httpstatuserror",
+            "network is unreachable", "name resolution",
+            "upload failed", "download failed",
+        )
+        if any(kw in msg for kw in network_kw):
             return "network_violation"
-        if any(kw in msg for kw in ("permission", "denied", "iptables", "capability")):
+        if any(kw in msg for kw in ("permission denied", "iptables", "capability", "sandbox_escape")):
             return "sandbox_escape"
-        if "timed out" in msg or "timeout" in msg:
+        if any(kw in msg for kw in ("timed out", "timedouterror", "evaluationtimeouterror")):
             return "timeout"
-        if any(kw in msg for kw in ("import", "module", "modulenotfounderror")):
+        if any(kw in msg for kw in ("modulenotfounderror", "no module named", "importerror")):
             return "import_error"
         return "runtime_error"
 

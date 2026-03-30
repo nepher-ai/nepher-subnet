@@ -183,6 +183,10 @@ echo "[SANDBOX] Dropping capabilities — firewall is now immutable"
 # Isaac Sim) and re-route argv so that the eval script runs as __main__.
 BOOTSTRAP="import multiprocessing, sys; multiprocessing.set_start_method('spawn', force=True); sys.argv = sys.argv[1:]; import runpy; runpy.run_path(sys.argv[0], run_name='__main__')"
 
+# Disable set -e so a non-zero exit from the evaluation does not skip
+# the fallback result-file write and log collection below.
+set +e
+
 # Drop capabilities so miner code cannot:
 #   - modify iptables rules  (NET_ADMIN)
 #   - re-grant capabilities  (SETPCAP)
@@ -195,6 +199,7 @@ capsh --drop=cap_net_admin,cap_setpcap,cap_setuid,cap_setgid -- -c "
 "
 
 EVAL_EXIT=$?
+set -e
 
 if [ $EVAL_EXIT -ne 0 ]; then
     echo "[SANDBOX] Evaluation exited with code: ${EVAL_EXIT}"

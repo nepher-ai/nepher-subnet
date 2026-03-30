@@ -185,9 +185,9 @@ class SandboxRunner:
                 sandbox_log += "\n--- stderr ---\n" + stderr
 
             if stdout:
-                logger.info(f"Sandbox stdout (last 2000 chars):\n{stdout[-2000:]}")
+                logger.info(f"Sandbox stdout (last 5000 chars):\n{stdout[-5000:]}")
             if stderr:
-                logger.warning(f"Sandbox stderr (last 2000 chars):\n{stderr[-2000:]}")
+                logger.warning(f"Sandbox stderr (last 5000 chars):\n{stderr[-5000:]}")
 
             # Collect result from output directory
             try:

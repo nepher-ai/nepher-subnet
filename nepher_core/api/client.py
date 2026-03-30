@@ -932,6 +932,24 @@ class TournamentAPI:
     # Report Endpoints
     # =========================================================================
 
+    @staticmethod
+    def _truncate_log(content: str, max_chars: int = 40000) -> str:
+        """Truncate log content preserving both the beginning and end.
+
+        When the log exceeds *max_chars*, keeps the first and last halves
+        separated by a marker so that both the initial error/traceback and
+        the final output remain visible in the report.
+        """
+        if len(content) <= max_chars:
+            return content
+        half = max_chars // 2
+        omitted = len(content) - max_chars
+        return (
+            content[:half]
+            + f"\n\n--- truncated {omitted} chars ---\n\n"
+            + content[-half:]
+        )
+
     async def report_agent(
         self,
         tournament_id: str,
@@ -964,7 +982,7 @@ class TournamentAPI:
                     "tournament_id": tournament_id,
                     "agent_id": agent_id,
                     "validator_hotkey": validator_hotkey,
-                    "log_content": log_content[-10000:],  # Truncate to last 10k chars
+                    "log_content": self._truncate_log(log_content, max_chars=20000),
                     "error_type": error_type,
                     "summary": summary,
                 },
