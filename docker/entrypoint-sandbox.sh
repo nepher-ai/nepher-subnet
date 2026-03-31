@@ -152,15 +152,19 @@ _align_gpu_driver_libs() {
 
     export LD_LIBRARY_PATH="${override_dir}:${host_lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-    # ── Step 3: Patch Isaac Sim's env setup so override survives ──
+    # ── Step 3: Patch Isaac Sim's env setup so override survives subprocesses ──
+    # Image layers may mount /isaac-sim read-only — append must never abort (set -e).
     local script
     for script in "${ISAACSIM_PATH}/setup_python_env.sh" \
                   "${ISAACSIM_PATH}/setup_conda_env.sh"; do
         [ -f "$script" ] || continue
         if ! grep -q "nvidia-driver-override" "$script" 2>/dev/null; then
-            printf '\n# [nepher-sandbox] Host GPU driver override\nexport LD_LIBRARY_PATH="%s:%s:${LD_LIBRARY_PATH}"\n' \
-                "$override_dir" "$host_lib_dir" >> "$script"
-            echo "[SANDBOX] Patched $(basename "$script")"
+            if printf '\n# [nepher-sandbox] Host GPU driver override\nexport LD_LIBRARY_PATH="%s:%s:${LD_LIBRARY_PATH}"\n' \
+                "$override_dir" "$host_lib_dir" >> "$script" 2>/dev/null; then
+                echo "[SANDBOX] Patched $(basename "$script")"
+            else
+                echo "[SANDBOX] Warning: $(basename "$script") is not writable — relying on LD_LIBRARY_PATH in this shell"
+            fi
         fi
     done
 
@@ -191,8 +195,11 @@ _disable_rtx_driver_check() {
     for kit_file in "${kit_files[@]}"; do
         [ -f "$kit_file" ] || continue
         if ! grep -q "verifyDriverVersion" "$kit_file" 2>/dev/null; then
-            printf '\n[settings]\nrtx.verifyDriverVersion.enabled = false\n' >> "$kit_file"
-            echo "[SANDBOX] Disabled RTX driver version check in $(basename "$kit_file")"
+            if printf '\n[settings]\nrtx.verifyDriverVersion.enabled = false\n' >> "$kit_file" 2>/dev/null; then
+                echo "[SANDBOX] Disabled RTX driver version check in $(basename "$kit_file")"
+            else
+                echo "[SANDBOX] Warning: could not patch $(basename "$kit_file") (read-only)"
+            fi
         fi
     done
 }
