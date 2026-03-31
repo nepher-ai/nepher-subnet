@@ -56,37 +56,38 @@ So the failure is almost certainly **array persistence** during env construction
 3. If the frame is `h5py` / `HDF5DatasetFileHandler`, disable or narrow dataset export in the play env cfg for evaluation builds.
 4. Align **NumPy / h5py** with the versions Isaac Lab 2.3.2 tests against if a library mismatch is suspected.
 
-## 6. Root cause (confirmed 2026-03-30)
+## 6. Root cause (confirmed 2026-03-31)
 
-The `kind=f, size=0` error is caused by an **RTX renderer failure** inside the sandbox container, not by HDF5/recorder or terrain cache writes.
+The `kind=f, size=0` error is caused by a **NumPy 2.x C ABI incompatibility** with Isaac Sim 5.1.0's compiled C++ extensions.
 
 ### Failure chain
 
-1. **Bundled driver shadows host driver.** The Isaac Sim base image (`nvcr.io/nvidia/isaac-sim:5.1.0`) ships Vulkan/GL userspace libraries for driver **535.32**. The NVIDIA Container Toolkit mounts the host's driver libraries (e.g. **535.288**), but the bundled copies appear earlier on `LD_LIBRARY_PATH` and shadow them.
-2. **RTX renderer refuses to start.** Omniverse Kit's `gpu.foundation.plugin` sees driver 535.32 (below the 535.129 minimum for RTX) and rejects it: `rtx driver verification failed`.
-3. **Depth camera produces a degenerate buffer.** The `TiledCamera` sensor (`data_types=["distance_to_camera"]`) requires the RTX renderer. Without it, the camera data tensor has a zero-sized float dtype.
-4. **NumPy blows up.** Isaac Lab env initialisation tries to write/allocate from this buffer → `TypeError: Unable to write from unknown dtype, kind=f, size=0`.
+1. **Torch reinstallation upgrades NumPy to 2.x.** The Dockerfile `pip install --force-reinstall torch` pulls in NumPy 2.2.6, replacing the 1.x version bundled with Isaac Sim 5.1.0.
+2. **NumPy 2.0 broke the C ABI.** Isaac Sim's C++ plugins (`omni.syntheticdata.plugin`, warp, etc.) were compiled against the NumPy 1.x C ABI. NumPy 2.0 [changed type constants, array descriptor structs, and buffer protocol semantics](https://numpy.org/doc/stable/release/2.0.0-notes.html#numpy-2-0-migration-guide). Binary extensions must be recompiled for 2.x.
+3. **Render variable registration corrupted.** When `omni.syntheticdata.plugin` calls NumPy C API functions (e.g. `PyArray_DescrFromType`) using 1.x constants, NumPy 2.x interprets them differently, producing a **corrupted dtype descriptor** (kind='f', itemsize=0). The `DistanceToCameraSD` render variable fails to materialize: `SdPostRenderVarTextureToBuffer missing valid input renderVar DistanceToCameraSD`.
+4. **Warp crashes on the corrupted buffer.** Isaac Lab's `TiledCamera._update_buffers_impl()` calls `annotator.get_data()`, receives a numpy array with the degenerate dtype, and `wp.array()` raises `TypeError: Unable to write from unknown dtype, kind=f, size=0`.
 
 ### Evidence
 
-- `nvidia-smi` inside the container reported the host version (535.288) because it always uses the host-mounted binary.
-- The Omniverse Kit startup table reported `Driver Version: 535.32.01` — the bundled version.
-- `EXPORT_NONE` was already set in the config dump, ruling out the HDF5 recorder.
+- The error is **100% reproducible with or without GPU driver alignment**. Running with the original entrypoint (no shim, no LD_LIBRARY_PATH override) produces the identical error, proving the GPU driver was never the cause.
+- Kit correctly detects the host driver (580.126.20) and Vulkan is functional — the RTX renderer initializes, but the syntheticdata pipeline fails at the NumPy C API boundary.
+- `EXPORT_NONE` was already set, ruling out HDF5 recorder.
 - `use_cache=False` ruled out terrain cache persistence.
+- NumPy 2.2.6 was confirmed via `pip show numpy` inside the running container.
 
-### Why simple `LD_LIBRARY_PATH` prepend is not enough
+### Fix
 
-Isaac Sim's `setup_python_env.sh` (sourced by `python.sh` on every launch) **re-sets** `LD_LIBRARY_PATH` with its own directories first. Any prepend done in the entrypoint gets pushed to the back, and the bundled libraries in Isaac Sim's directories win again.
+Pin NumPy to 1.x in `Dockerfile.sandbox` **after** the torch reinstallation:
 
-### Fix (v2 — three-layer override)
+```dockerfile
+RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir "numpy>=1.24,<2"
+```
 
-`entrypoint-sandbox.sh` now includes `_align_gpu_driver_libs()` with three layers:
+All downstream dependencies (`eval-nav`, `nepher`, `prettytable`, `hidapi`) require only `numpy>=1.20` and are satisfied by 1.24–1.26.
 
-1. **Override directory** (`/app/nvidia-driver-override/`): contains symlinks whose filenames match **both** the host version (`*.so.535.288.01`) **and** the bundled version (`*.so.535.32.01`) — all pointing to the host library. No matter which version the dynamic linker requests, it gets the host copy.
-2. **Patch `setup_python_env.sh`**: appends a line at the END of Isaac Sim's env setup script that prepends the override directory to `LD_LIBRARY_PATH`. Because it runs last, it takes effect after Isaac Sim's own path setup.
-3. **Vulkan ICD manifests**: updates all `nvidia_icd*.json` files (system-wide and inside the Isaac Sim tree) to reference the host version of `libnvidia-vulkan-producer.so`.
+### Previous hypothesis (disproved): GPU driver library shadowing
 
-This runs automatically before the evaluation — no host-side changes required (though updating the NVIDIA Container Toolkit is still recommended).
+The initial investigation (2026-03-30) hypothesised that bundled driver libraries in the Isaac Sim image shadowed host-mounted libs, preventing RTX from starting. While this *can* be a real issue on older hosts (e.g. driver 535.32 bundled vs 535.288 host), it was not the cause in the 580.x driver case. The `_align_gpu_driver_libs()` shim in `entrypoint-sandbox.sh` is retained as a safety net for future driver/GPU combinations but does not fix this particular error.
 
 ## 7. Previous fix (task-spot-nav)
 

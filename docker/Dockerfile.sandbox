@@ -65,6 +65,13 @@ RUN CUDA_TAG="cu$(echo ${CUDA_VERSION:-12.4.0} | cut -d. -f1,2 | tr -d '.')" \
     && ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir --force-reinstall \
         torch torchvision torchaudio --index-url https://download.pytorch.org/whl/${CUDA_TAG}
 
+# Fix: The torch reinstall above upgrades NumPy to 2.x. Isaac Sim 5.1.0's
+# C++ extensions (omni.syntheticdata.plugin, warp) were compiled against the
+# NumPy 1.x C ABI which is binary-incompatible with 2.x. The ABI mismatch
+# corrupts dtype descriptors in the rendering pipeline, causing
+# TiledCamera/distance_to_camera to produce kind=f,size=0 degenerate buffers.
+RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir "numpy>=1.24,<2"
+
 # Install missing Isaac Lab dependency (prettytable is required by isaaclab.managers)
 RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir prettytable
 
