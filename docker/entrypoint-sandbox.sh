@@ -108,7 +108,9 @@ _align_gpu_driver_libs() {
         name=$(basename "$stale_lib")
 
         # Extract version suffix (e.g., 535.32.01 from libnvidia-glcore.so.535.32.01)
-        ver=$(echo "$name" | grep -oP '\.so\.\K[0-9]+\.[0-9.]+$')
+        # grep exits 1 when there is no match — with set -e that would abort the whole
+        # entrypoint before any evaluation_result.json is written; never fail here.
+        ver=$(echo "$name" | grep -oP '\.so\.\K[0-9]+\.[0-9.]+$' || true)
         [ -z "$ver" ] && continue
         [ "$ver" = "$host_ver" ] && continue
 
@@ -119,12 +121,13 @@ _align_gpu_driver_libs() {
 
         # Replace the stale library with a symlink to the host version
         ln -sf "$host_equiv" "$stale_lib" 2>/dev/null && replaced=$((replaced + 1))
+    # grep exits 1 when nothing passes the filter — must not trip set -e
     done < <(find /isaac-sim /usr/lib /opt 2>/dev/null \
              -name "libnvidia-*.so.*" -o \
              -name "libcuda.so.*" -o \
              -name "libGLX_nvidia.so.*" -o \
              -name "libvdpau_nvidia.so.*" \
-             | grep -v "\.${host_ver}$")
+             | grep -v "\.${host_ver}$" || true)
 
     echo "[SANDBOX] Replaced ${replaced} stale driver libs → ${host_ver}"
 
