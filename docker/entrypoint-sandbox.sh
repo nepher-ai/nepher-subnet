@@ -61,15 +61,11 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 # (TiledCamera  distance_to_camera) produces a degenerate buffer
 # → TypeError: Unable to write from unknown dtype, kind=f, size=0
 #
-# Fix:
-#   1. Create an override directory filled with symlinks to every host
-#      driver lib (versioned + unversioned names).
-#   2. Replace stale-versioned libs found anywhere under /isaac-sim/
-#      with symlinks to the host copy.
-#   3. Patch Isaac Sim's setup scripts to prepend the override dir so
-#      it survives subprocesses.
-#   4. Update Vulkan ICD manifests.
-#   5. Disable the RTX driver version check in Kit configs (safety net).
+# /isaac-sim/ is often mounted read-only by the NVIDIA Container
+# Toolkit, so we CANNOT patch files there.  Instead we build a shim
+# directory that mirrors /isaac-sim/ via symlinks, replacing only
+# the env-setup scripts with patched copies, then redirect Isaac Lab's
+# _isaac_sim symlink to the shim.
 _align_gpu_driver_libs() {
     local host_ver
     host_ver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null \
@@ -101,32 +97,7 @@ _align_gpu_driver_libs() {
 
     echo "[SANDBOX] Host driver libs at: ${host_lib_dir}"
 
-    # ── Step 1: Replace stale driver libs under /isaac-sim/ in-place ──
-    local replaced=0
-    while IFS= read -r stale_lib; do
-        [ -f "$stale_lib" ] || continue
-        local name ver base host_equiv
-        name=$(basename "$stale_lib")
-
-        ver=$(echo "$name" | grep -oP '\.so\.\K[0-9]+\.[0-9.]+$' || true)
-        [ -z "$ver" ] && continue
-        [ "$ver" = "$host_ver" ] && continue
-
-        base=$(echo "$name" | sed "s/\.${ver}$//")
-        host_equiv="${host_lib_dir}/${base}.${host_ver}"
-        [ -f "$host_equiv" ] || continue
-
-        ln -sf "$host_equiv" "$stale_lib" 2>/dev/null && replaced=$((replaced + 1))
-    done < <(find /isaac-sim /usr/lib /opt 2>/dev/null \
-             -name "libnvidia-*.so.*" -o \
-             -name "libcuda.so.*" -o \
-             -name "libGLX_nvidia.so.*" -o \
-             -name "libvdpau_nvidia.so.*" \
-             | grep -v "\.${host_ver}$" || true)
-
-    echo "[SANDBOX] Replaced ${replaced} stale driver libs → ${host_ver}"
-
-    # ── Step 2: Override directory with host-lib symlinks ──
+    # ── Step 1: Override directory with host-lib symlinks ──
     local override_dir="/app/nvidia-driver-override"
     mkdir -p "$override_dir"
 
@@ -147,22 +118,44 @@ _align_gpu_driver_libs() {
 
     export LD_LIBRARY_PATH="${override_dir}:${host_lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-    # ── Step 3: Patch Isaac Sim's env setup so override survives subprocesses ──
-    local script
-    for script in "${ISAACSIM_PATH}/setup_python_env.sh" \
-                  "${ISAACSIM_PATH}/setup_conda_env.sh"; do
-        [ -f "$script" ] || continue
-        if ! grep -q "nvidia-driver-override" "$script" 2>/dev/null; then
-            if printf '\n# [nepher-sandbox] Host GPU driver override\nexport LD_LIBRARY_PATH="%s:%s:${LD_LIBRARY_PATH}"\n' \
-                "$override_dir" "$host_lib_dir" >> "$script" 2>/dev/null; then
-                echo "[SANDBOX] Patched $(basename "$script")"
-            else
-                echo "[SANDBOX] Warning: $(basename "$script") is not writable — relying on LD_LIBRARY_PATH in this shell"
-            fi
-        fi
+    # ── Step 2: Shim directory — shadow /isaac-sim/ with patched scripts ──
+    # /isaac-sim/ is read-only (NVIDIA toolkit mount), so we build a thin
+    # overlay: symlinks for everything except the env-setup scripts and
+    # python.sh, which are writable copies we can patch.
+    local shim_dir="/app/isaac-sim-shim"
+    mkdir -p "$shim_dir"
+
+    local item base_name
+    for item in /isaac-sim/*; do
+        [ -e "$item" ] || continue
+        base_name=$(basename "$item")
+        case "$base_name" in
+            setup_python_env.sh|setup_conda_env.sh)
+                cp "$item" "${shim_dir}/${base_name}" 2>/dev/null || true
+                chmod u+w "${shim_dir}/${base_name}" 2>/dev/null || true
+                printf '\n# [nepher-sandbox] Host GPU driver override\nexport LD_LIBRARY_PATH="%s:%s:${LD_LIBRARY_PATH}"\n' \
+                    "$override_dir" "$host_lib_dir" >> "${shim_dir}/${base_name}"
+                echo "[SANDBOX] Patched ${base_name} (shim)"
+                ;;
+            python.sh)
+                cp "$item" "${shim_dir}/${base_name}" 2>/dev/null || true
+                chmod +x "${shim_dir}/${base_name}" 2>/dev/null || true
+                ;;
+            *)
+                ln -sf "$item" "${shim_dir}/${base_name}" 2>/dev/null || true
+                ;;
+        esac
     done
 
-    # ── Step 4: Vulkan ICD manifests ──
+    # Redirect Isaac Lab's _isaac_sim symlink to the shim.
+    # /isaac-lab/ is writable (git-cloned layer), so this always works.
+    if [ -L "${ISAACLAB_PATH}/_isaac_sim" ] || [ -e "${ISAACLAB_PATH}/_isaac_sim" ]; then
+        rm -f "${ISAACLAB_PATH}/_isaac_sim"
+    fi
+    ln -sf "$shim_dir" "${ISAACLAB_PATH}/_isaac_sim"
+    echo "[SANDBOX] Redirected _isaac_sim → ${shim_dir}"
+
+    # ── Step 3: Vulkan ICD manifests ──
     while IFS= read -r icd; do
         sed -i "s/libnvidia-vulkan-producer\.so\.[0-9.]*/libnvidia-vulkan-producer.so.${host_ver}/g" \
             "$icd" 2>/dev/null || true
@@ -170,7 +163,7 @@ _align_gpu_driver_libs() {
 
     ldconfig 2>/dev/null || true
 
-    # ── Step 5: Disable RTX driver version check ──
+    # ── Step 4: Disable RTX driver version check ──
     _disable_rtx_driver_check
 
     echo "[SANDBOX] GPU driver alignment complete → ${host_ver}"

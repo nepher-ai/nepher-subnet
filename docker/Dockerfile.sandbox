@@ -89,13 +89,6 @@ RUN mkdir -p /isaac-sim/kit/data /isaac-sim/kit/cache/DerivedDataCache \
     /isaac-sim/kit/cache/nv_shadercache \
     && chmod -R 777 /isaac-sim/kit/data /isaac-sim/kit/cache
 
-# Make Isaac Sim env setup scripts writable so the entrypoint can patch
-# LD_LIBRARY_PATH to prioritise host GPU driver libs over bundled ones.
-# Without this, Isaac Sim's bundled (stale) driver libs shadow the host
-# libs mounted by the NVIDIA Container Toolkit, breaking RTX rendering
-# and the depth camera (TiledCamera distance_to_camera).
-RUN chmod u+w /isaac-sim/setup_python_env.sh /isaac-sim/setup_conda_env.sh 2>/dev/null || true
-
 # Create directories for evaluation I/O
 # /sandbox/agent   — agent ZIP extracted here (mounted read-only by validator)
 # /sandbox/output  — evaluation results written here (mounted writable)
