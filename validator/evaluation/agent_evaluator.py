@@ -21,7 +21,7 @@ from typing import Optional, Any
 
 import yaml
 
-from nepher_core.api import TournamentAPI, Agent
+from nepher_core.api import TournamentAPI, Agent, APIError
 from nepher_core.config import ValidatorConfig
 from nepher_core.utils.helpers import (
     unzip_file,
@@ -109,9 +109,6 @@ class AgentEvaluator:
             )
 
             result = await self._run_sandboxed_evaluation(task_module)
-            await self._submit_results(tournament_id, agent.id, result)
-
-            logger.info(f"Evaluation complete for agent: {agent.id}")
 
         except EvaluationError:
             raise
@@ -123,6 +120,18 @@ class AgentEvaluator:
             raise EvaluationError(str(e), recoverable=True)
         finally:
             await self._cleanup(tournament_id)
+
+        # Submit outside the EvaluationError try-block so that API
+        # submission errors (e.g. "already submitted") are never wrapped
+        # as EvaluationError and never trigger submit_failed_evaluation
+        # in the orchestrator.
+        try:
+            await self._submit_results(tournament_id, agent.id, result)
+            logger.info(f"Evaluation complete for agent: {agent.id}")
+        except APIError as e:
+            logger.warning(f"Result submission failed for agent {agent.id}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected submission error for agent {agent.id}: {e}")
 
     # -- Shared helpers -------------------------------------------------------
 
