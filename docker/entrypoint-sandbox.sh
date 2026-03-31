@@ -50,6 +50,151 @@ fi
 echo "[SANDBOX] GPU OK:"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
+# ── GPU driver library alignment ──────────────────────────────
+# Isaac Sim 5.1.0 bundles NVIDIA userspace libraries inside its own
+# directory tree.  setup_python_env.sh (sourced by python.sh on every
+# launch) places those directories FIRST on LD_LIBRARY_PATH, so the
+# bundled copies always shadow the host-version libs mounted by the
+# NVIDIA Container Toolkit.
+#
+# When the bundled version is too old for RTX, the depth camera
+# (TiledCamera  distance_to_camera) produces a degenerate buffer
+# → TypeError: Unable to write from unknown dtype, kind=f, size=0
+#
+# Fix:
+#   1. Create an override directory filled with symlinks to every host
+#      driver lib (versioned + unversioned names).
+#   2. Replace stale-versioned libs found anywhere under /isaac-sim/
+#      with symlinks to the host copy.
+#   3. Patch Isaac Sim's setup scripts to prepend the override dir so
+#      it survives subprocesses.
+#   4. Update Vulkan ICD manifests.
+#   5. Disable the RTX driver version check in Kit configs (safety net).
+_align_gpu_driver_libs() {
+    local host_ver
+    host_ver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null \
+               | head -1 | tr -d '[:space:]')
+    [ -z "$host_ver" ] && return 0
+
+    echo "[SANDBOX] Host GPU driver version: ${host_ver}"
+
+    # Locate host-version libraries (toolkit mounts them in system lib dirs).
+    local host_lib_dir=""
+    for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
+        if [ -f "${d}/libnvidia-glcore.so.${host_ver}" ]; then
+            host_lib_dir="$d"
+            break
+        fi
+    done
+    if [ -z "$host_lib_dir" ]; then
+        local _found
+        _found=$(find /usr -maxdepth 5 -name "libnvidia-glcore.so.${host_ver}" 2>/dev/null | head -1)
+        [ -n "$_found" ] && host_lib_dir=$(dirname "$_found")
+    fi
+
+    if [ -z "$host_lib_dir" ]; then
+        echo "[SANDBOX] Warning: host driver ${host_ver} userspace libs not found"
+        echo "[SANDBOX] Toolkit may not have mounted graphics libraries"
+        _disable_rtx_driver_check
+        return 0
+    fi
+
+    echo "[SANDBOX] Host driver libs at: ${host_lib_dir}"
+
+    # ── Step 1: Replace stale driver libs under /isaac-sim/ in-place ──
+    local replaced=0
+    while IFS= read -r stale_lib; do
+        [ -f "$stale_lib" ] || continue
+        local name ver base host_equiv
+        name=$(basename "$stale_lib")
+
+        ver=$(echo "$name" | grep -oP '\.so\.\K[0-9]+\.[0-9.]+$' || true)
+        [ -z "$ver" ] && continue
+        [ "$ver" = "$host_ver" ] && continue
+
+        base=$(echo "$name" | sed "s/\.${ver}$//")
+        host_equiv="${host_lib_dir}/${base}.${host_ver}"
+        [ -f "$host_equiv" ] || continue
+
+        ln -sf "$host_equiv" "$stale_lib" 2>/dev/null && replaced=$((replaced + 1))
+    done < <(find /isaac-sim /usr/lib /opt 2>/dev/null \
+             -name "libnvidia-*.so.*" -o \
+             -name "libcuda.so.*" -o \
+             -name "libGLX_nvidia.so.*" -o \
+             -name "libvdpau_nvidia.so.*" \
+             | grep -v "\.${host_ver}$" || true)
+
+    echo "[SANDBOX] Replaced ${replaced} stale driver libs → ${host_ver}"
+
+    # ── Step 2: Override directory with host-lib symlinks ──
+    local override_dir="/app/nvidia-driver-override"
+    mkdir -p "$override_dir"
+
+    for host_lib in "${host_lib_dir}"/lib*nvidia*.so."${host_ver}" \
+                    "${host_lib_dir}"/libcuda.so."${host_ver}" \
+                    "${host_lib_dir}"/libGLX_nvidia.so.0."${host_ver}"; do
+        [ -f "$host_lib" ] || continue
+        local name base
+        name=$(basename "$host_lib")
+        base="${name%.${host_ver}}"
+        ln -sf "$host_lib" "${override_dir}/${name}" 2>/dev/null || true
+        ln -sf "$host_lib" "${override_dir}/${base}" 2>/dev/null || true
+        case "$base" in
+            *.so.[0-9]*) ;;
+            *) ln -sf "$host_lib" "${override_dir}/${base}.1" 2>/dev/null || true ;;
+        esac
+    done
+
+    export LD_LIBRARY_PATH="${override_dir}:${host_lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+    # ── Step 3: Patch Isaac Sim's env setup so override survives subprocesses ──
+    local script
+    for script in "${ISAACSIM_PATH}/setup_python_env.sh" \
+                  "${ISAACSIM_PATH}/setup_conda_env.sh"; do
+        [ -f "$script" ] || continue
+        if ! grep -q "nvidia-driver-override" "$script" 2>/dev/null; then
+            if printf '\n# [nepher-sandbox] Host GPU driver override\nexport LD_LIBRARY_PATH="%s:%s:${LD_LIBRARY_PATH}"\n' \
+                "$override_dir" "$host_lib_dir" >> "$script" 2>/dev/null; then
+                echo "[SANDBOX] Patched $(basename "$script")"
+            else
+                echo "[SANDBOX] Warning: $(basename "$script") is not writable — relying on LD_LIBRARY_PATH in this shell"
+            fi
+        fi
+    done
+
+    # ── Step 4: Vulkan ICD manifests ──
+    while IFS= read -r icd; do
+        sed -i "s/libnvidia-vulkan-producer\.so\.[0-9.]*/libnvidia-vulkan-producer.so.${host_ver}/g" \
+            "$icd" 2>/dev/null || true
+    done < <(find / -maxdepth 7 -name "nvidia_icd*.json" 2>/dev/null)
+
+    ldconfig 2>/dev/null || true
+
+    # ── Step 5: Disable RTX driver version check ──
+    _disable_rtx_driver_check
+
+    echo "[SANDBOX] GPU driver alignment complete → ${host_ver}"
+}
+
+_disable_rtx_driver_check() {
+    local kit_files=(
+        "${ISAACLAB_PATH}/apps/isaaclab.python.headless.rendering.kit"
+        "${ISAACLAB_PATH}/apps/isaaclab.python.headless.kit"
+    )
+    for kit_file in "${kit_files[@]}"; do
+        [ -f "$kit_file" ] || continue
+        if ! grep -q "verifyDriverVersion" "$kit_file" 2>/dev/null; then
+            if printf '\n[settings]\nrtx.verifyDriverVersion.enabled = false\n' >> "$kit_file" 2>/dev/null; then
+                echo "[SANDBOX] Disabled RTX driver version check in $(basename "$kit_file")"
+            else
+                echo "[SANDBOX] Warning: could not patch $(basename "$kit_file") (read-only)"
+            fi
+        fi
+    done
+}
+
+_align_gpu_driver_libs
+
 # ── Network firewall (transparent proxy + iptables) ────────────
 echo "[SANDBOX] Setting up network firewall..."
 
