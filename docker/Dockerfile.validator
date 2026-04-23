@@ -47,7 +47,7 @@ COPY validator/ ./validator/
 COPY pyproject.toml .
 
 # Install package
-RUN pip install -e .
+RUN pip install --no-cache-dir "async-substrate-interface<2.0.0" .
 
 # Create directories for runtime
 RUN mkdir -p /app/config /app/workspace /app/logs \
