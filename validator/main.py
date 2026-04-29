@@ -40,8 +40,9 @@ class ValidatorOrchestrator:
     2. Run setup during submit window
     3. Evaluate agents during evaluation period
     4. Set weights during reward period
-    5. Reset and wait for next tournament
-    
+    5. When the API reports no active tournament, burn on UID 0 on the same cadence
+       as other idle phases while continuing to poll for the next tournament
+
     Supports two run modes controlled by ``config.mode``:
     - **gpu** (default): full behaviour — setup, evaluation, reward, and
       hourly burn when not in reward period (same as CPU).
@@ -100,6 +101,8 @@ class ValidatorOrchestrator:
         
         # Current tournament
         self._current_tournament: Optional[Tournament] = None
+        # Throttle UID-0 burns when API reports no active tournament (see _main_loop)
+        self._last_no_tournament_burn_monotonic: Optional[float] = None
 
     def _reload_config(self) -> None:
         """
@@ -179,11 +182,35 @@ class ValidatorOrchestrator:
                 self._current_tournament = tournament
                 
                 if tournament is None:
-                    logger.info(
-                        f"No active tournament. Sleeping {self.NO_TOURNAMENT_INTERVAL}s before next check..."
-                    )
+                    if self._weight_setter is None:
+                        self._weight_setter = WeightSetter(self.config, self.api)
+                    now = time.monotonic()
+                    if (
+                        self._last_no_tournament_burn_monotonic is None
+                        or (now - self._last_no_tournament_burn_monotonic)
+                        >= self.BURN_INTERVAL
+                    ):
+                        logger.info(
+                            "No active tournament — burning 100% on UID 0 "
+                            f"(idle burn cadence: {self.BURN_INTERVAL}s)"
+                        )
+                        await self._weight_setter.burn(
+                            tournament_id=None,
+                            phase="public",
+                        )
+                        self._last_no_tournament_burn_monotonic = now
+                    else:
+                        secs = self.BURN_INTERVAL - (
+                            now - self._last_no_tournament_burn_monotonic
+                        )
+                        logger.debug(
+                            f"No active tournament — next UID-0 burn in ~{int(secs)}s "
+                            f"(polling API every {self.NO_TOURNAMENT_INTERVAL}s)"
+                        )
                     await asyncio.sleep(self.NO_TOURNAMENT_INTERVAL)
                     continue
+                
+                self._last_no_tournament_burn_monotonic = None
                 
                 # Detect new or changed tournament — reload config so
                 # common_config updates take effect, and reset setup state
