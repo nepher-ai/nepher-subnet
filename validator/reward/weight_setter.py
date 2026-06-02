@@ -26,6 +26,8 @@ from nepher_core.wallet.utils import (
     find_uid_for_hotkey,
 )
 from nepher_core.utils.logging import get_logger
+from validator.state import TournamentPeriod, get_current_period
+from validator.reward.distribution import compute_weight_distribution
 
 logger = get_logger(__name__)
 
@@ -140,50 +142,122 @@ class WeightSetter:
         logger.info("Burning on UID 0")
         await self._set_weight_distribution({self.BURN_UID: 1.0}, metagraph)
 
-    async def run_reward(
-        self,
-        tournament: Tournament,
-        is_reward_period_fn,
-    ) -> None:
+    async def set_combined_weights(self, tournaments: List[Tournament]) -> None:
         """
-        Run reward phase - set weights to winner every hour.
-        
+        Compute and set ONE combined weight vector across all active tournaments.
+
+        This is the single weight-setting entry point for the multi-tournament
+        validator. Each non-reward tournament contributes a fixed 1% to its
+        preliminary leader; the single reward-period tournament's winner
+        receives all remaining weight; anything unallocated burns on UID 0.
+
         Args:
-            tournament: Current tournament
-            is_reward_period_fn: Function that returns True if in reward
+            tournaments: All currently-active tournaments (may be empty).
         """
-        logger.info("=" * 60)
-        logger.info("Starting reward phase (weight setting on chain)")
-        logger.info("=" * 60)
-        
-        while await is_reward_period_fn():
-            # Refresh metagraph each cycle
-            metagraph = self._get_metagraph()
-            logger.info(f"Loaded metagraph with {len(metagraph.uids)} UIDs")
-            
-            # Query winner from API
-            winner_uid = await self._get_winner_uid(tournament.id, metagraph)
-            
-            # Set weights
-            await self._set_weights(winner_uid, metagraph)
-            
-            # Sleep for 1 hour (or until reward period ends)
-            logger.info(
-                f"Weights set. Next weight-setting in {self.WEIGHT_SET_INTERVAL}s..."
-            )
-            elapsed = 0
-            while elapsed < self.WEIGHT_SET_INTERVAL and await is_reward_period_fn():
-                await asyncio.sleep(60)
-                elapsed += 60
-        
-        # After reward ends, burn on UID 0
-        logger.info("Reward period ended - burning on UID 0")
         metagraph = self._get_metagraph()
-        await self._set_weights(self.BURN_UID, metagraph)
-        
-        logger.info("=" * 60)
-        logger.info("Reward phase complete")
-        logger.info("=" * 60)
+
+        if not tournaments:
+            logger.info("No active tournaments — burning 100% on UID 0")
+            await self._set_weight_distribution({self.BURN_UID: 1.0}, metagraph)
+            return
+
+        weight_map = await self.compute_distribution(tournaments, metagraph)
+        await self._set_weight_distribution(weight_map, metagraph)
+
+    async def compute_distribution(
+        self,
+        tournaments: List[Tournament],
+        metagraph: bt.Metagraph,
+    ) -> dict[int, float]:
+        """
+        Build the combined ``{uid: weight}`` distribution for active tournaments.
+
+        Rules (see incentive mechanism / plan):
+        - Each tournament NOT in its reward period contributes ``LEADER_WEIGHT_FRACTION``
+          (1%) to its current preliminary leader, if that leader resolves to a UID.
+        - The single tournament in its reward period gives its approved winner all
+          remaining weight (``1 - sum(fixed allocations)``).
+        - If there is no reward tournament (or its winner is unavailable/not in the
+          metagraph), the remainder burns on UID 0.
+        - Duplicate UIDs (leader == winner == burn) are merged by addition; the
+          final map is normalized to sum to 1.0.
+
+        Tournaments are processed in a deterministic (id-sorted) order so that
+        CPU and GPU validators sharing a hotkey produce identical weight hashes.
+        """
+        sorted_tournaments = sorted(tournaments, key=lambda t: str(t.id))
+
+        leader_uids: list[Optional[int]] = []
+        reward_tournaments: List[Tournament] = []
+
+        for tournament in sorted_tournaments:
+            period = get_current_period(tournament)
+
+            if period == TournamentPeriod.REWARD:
+                reward_tournaments.append(tournament)
+                continue
+
+            # Non-reward tournament: allocate a fixed 1% to its preliminary leader.
+            phase = (
+                "public"
+                if period == TournamentPeriod.PUBLIC_EVALUATION
+                else "private"
+            )
+            try:
+                leader = await self.api.get_preliminary_leader(tournament.id, phase=phase)
+            except Exception as e:
+                logger.warning(
+                    f"[{tournament.id}] preliminary-leader lookup failed: {e}"
+                )
+                continue
+
+            if not leader.leader_hotkey:
+                continue
+            leader_uid = find_uid_for_hotkey(metagraph, leader.leader_hotkey)
+            if leader_uid is None:
+                logger.info(
+                    f"[{tournament.id}] leader {leader.leader_hotkey[:16]}… not in "
+                    "metagraph — skipping its 1% (rolls into remainder)"
+                )
+                continue
+
+            leader_uids.append(leader_uid)
+            logger.info(
+                f"[{tournament.id}] fixed {self.LEADER_WEIGHT_FRACTION:.0%} -> "
+                f"UID {leader_uid} (leader)"
+            )
+
+        # Resolve the remainder recipient: the single reward winner, else burn.
+        winner_uid: Optional[int] = None
+        if reward_tournaments:
+            if len(reward_tournaments) > 1:
+                # Reward periods are validated to never overlap; if we still see
+                # more than one, behave defensively: pick the earliest-starting
+                # reward tournament and burn the rest's share.
+                ids = ", ".join(str(t.id) for t in reward_tournaments)
+                logger.error(
+                    f"Multiple tournaments in reward period simultaneously ({ids}); "
+                    "using the earliest reward_start_time and burning the rest"
+                )
+                reward_tournaments.sort(
+                    key=lambda t: (t.reward_start_time or 0, str(t.id))
+                )
+            chosen = reward_tournaments[0]
+            resolved = await self._get_winner_uid(chosen.id, metagraph)
+            # ``_get_winner_uid`` returns BURN_UID when there is no approved
+            # winner; treat that as "burn" (None) for the math.
+            winner_uid = resolved if resolved != self.BURN_UID else None
+            logger.info(
+                f"[{chosen.id}] reward winner UID "
+                f"{resolved} receives the remainder"
+            )
+
+        return compute_weight_distribution(
+            leader_uids,
+            reward_winner_uid=winner_uid,
+            burn_uid=self.BURN_UID,
+            leader_fraction=self.LEADER_WEIGHT_FRACTION,
+        )
 
     async def _get_winner_uid(
         self,
