@@ -71,16 +71,31 @@ class AgentEvaluator:
         self.api = api
         self.validator_hotkey = validator_hotkey
 
-        # Paths
+        # Base workspace (shared). Per-tournament artifacts live under
+        # workspace/tournaments/<id>/ but remain *under* the base workspace so
+        # the sandbox HOST_WORKSPACE path mapping keeps working.
         self.workspace = config.paths.workspace
+
+        # Per-evaluation context (set by _set_tournament_context). Evaluation is
+        # sequential (one agent at a time), so storing the current tournament's
+        # paths on the instance is safe.
+        self.tn_workspace: Path = self.workspace
         self.registry_path = self.workspace / "agent_registry"
         self.result_path = self.workspace / "evaluation_result.json"
 
-        # Sandbox runner for isolated evaluation
+        # Sandbox runner for isolated evaluation. Workspace is the *base* dir so
+        # that Docker volume host-path translation continues to resolve.
         self.sandbox = SandboxRunner(
             workspace=self.workspace,
             env_cache_path=config.paths.env_cache,
         )
+
+    def _set_tournament_context(self, tournament_id: str) -> None:
+        """Point per-evaluation paths at the given tournament's workspace."""
+        self.tn_workspace = self.config.paths.tournament_workspace(tournament_id)
+        self.tn_workspace.mkdir(parents=True, exist_ok=True)
+        self.registry_path = self.tn_workspace / "agent_registry"
+        self.result_path = self.tn_workspace / "evaluation_result.json"
 
     # -- Public API -----------------------------------------------------------
 
@@ -95,10 +110,11 @@ class AgentEvaluator:
         Raises:
             EvaluationError: If any step fails.
         """
+        self._set_tournament_context(tournament_id)
         task_module = self._get_task_module()
 
         try:
-            logger.info(f"Evaluating agent: {agent.id}")
+            logger.info(f"Evaluating agent: {agent.id} (tournament {tournament_id})")
             await self._clean_previous_state()
             await self._prepare_agent(agent)
 
@@ -136,10 +152,26 @@ class AgentEvaluator:
     # -- Shared helpers -------------------------------------------------------
 
     def _get_task_module(self) -> str:
-        """Get task module name from config."""
-        if self.config.task_config is None:
-            raise EvaluationError("Task configuration not loaded", recoverable=False)
-        return self.config.task_config.task_module
+        """Get task module name from the current tournament's task config.
+
+        Reads the per-tournament task_config.yaml (written by setup) so that
+        concurrently-active tournaments each use their own task module.
+        """
+        task_config_path = self.tn_workspace / "task_config.yaml"
+        if not task_config_path.exists():
+            raise EvaluationError(
+                f"Task configuration not found: {task_config_path}",
+                recoverable=False,
+            )
+        with open(task_config_path, "r") as f:
+            task_config = yaml.safe_load(f) or {}
+        task_module = task_config.get("task_module")
+        if not task_module:
+            raise EvaluationError(
+                "task_module missing from task configuration",
+                recoverable=False,
+            )
+        return task_module
 
     # -- Pipeline steps -------------------------------------------------------
 
@@ -243,7 +275,7 @@ class AgentEvaluator:
 
         The policy_path uses the sandbox-internal mount path, not the host path.
         """
-        task_config_path = self.workspace / "task_config.yaml"
+        task_config_path = self.tn_workspace / "task_config.yaml"
         if not task_config_path.exists():
             raise EvaluationError(
                 f"Task config not found: {task_config_path}",
@@ -257,7 +289,7 @@ class AgentEvaluator:
         config_data["policy_path"] = policy_path
         logger.info(f"Resolved policy_path (sandbox): {policy_path}")
 
-        eval_config_path = self.workspace / "eval_config.yaml"
+        eval_config_path = self.tn_workspace / "eval_config.yaml"
         with open(eval_config_path, "w") as f:
             yaml.dump(config_data, f, default_flow_style=False)
 
@@ -287,13 +319,14 @@ class AgentEvaluator:
         # Fetch whitelisted domains for sandbox network proxy
         whitelist_domains = await self.api.get_whitelist_domains()
 
-        # Run in sandbox
+        # Run in sandbox (pass the per-tournament task config explicitly)
         result = await self.sandbox.run_evaluation(
             agent_registry=self.registry_path,
             eval_config_path=eval_config_path,
             task_module=task_module,
             timeout=timeout,
             whitelist_domains=whitelist_domains,
+            task_config_path=self.tn_workspace / "task_config.yaml",
         )
 
         # Save result to canonical location for log archiving
@@ -348,7 +381,7 @@ class AgentEvaluator:
         logger.debug("Cleaning up after evaluation")
 
         self.result_path.unlink(missing_ok=True)
-        eval_config = self.workspace / "eval_config.yaml"
+        eval_config = self.tn_workspace / "eval_config.yaml"
         eval_config.unlink(missing_ok=True)
 
         clean_directory(self.registry_path)

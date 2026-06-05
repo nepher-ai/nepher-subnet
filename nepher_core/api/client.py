@@ -263,6 +263,44 @@ class TournamentAPI:
             logger.error(f"Failed to fetch active tournament: {e}")
             return None
 
+    async def get_active_tournaments(self, subnet: bool = True) -> list[Tournament]:
+        """
+        Get all currently active tournaments (multi-tournament aware).
+
+        Hits the canonical ``GET /active/list`` endpoint. With ``subnet=true``
+        the backend returns a minimized payload containing only the fields
+        validators need.
+
+        Falls back to the deprecated single-tournament ``GET /active`` endpoint
+        when ``/active/list`` is unavailable (older backends), so an upgraded
+        validator keeps working against a not-yet-upgraded backend.
+
+        Returns:
+            List of active tournaments (possibly empty).
+
+        Endpoint: GET /api/v1/tournaments/active/list?subnet=true
+        """
+        try:
+            response = await self._request(
+                "GET",
+                "/api/v1/tournaments/active/list",
+                params={"subnet": "true" if subnet else "false"},
+            )
+            data = response.json() or {}
+            items = data.get("tournaments", []) if isinstance(data, dict) else []
+            tournaments = [Tournament(**item) for item in items]
+            logger.info(f"Active tournaments found: {len(tournaments)}")
+            return tournaments
+        except NotFoundError:
+            logger.info("No active tournaments (404)")
+            return []
+        except APIError as e:
+            logger.warning(
+                f"/active/list failed ({e}); falling back to single /active endpoint"
+            )
+            single = await self.get_active_tournament()
+            return [single] if single is not None else []
+
     async def get_tournament(self, tournament_id: str) -> Tournament:
         """
         Get tournament by ID.
@@ -406,6 +444,7 @@ class TournamentAPI:
         file_info: str,
         signature: str,
         file_size: int,
+        tournament_id: Optional[str] = None,
     ) -> UploadToken:
         """
         Request an upload token for agent submission.
@@ -416,22 +455,29 @@ class TournamentAPI:
             file_info: Signed message in format "hotkey:content_hash:timestamp"
             signature: Hex-encoded signature of file_info
             file_size: Size of the file in bytes
+            tournament_id: Target tournament. Required by the backend when more
+                than one tournament is active; optional (auto-selected) when a
+                single tournament is active.
             
         Returns:
             Upload token with tournament_id
             
         Endpoint: POST /api/v1/agents/upload/verify
         """
+        body: dict[str, Any] = {
+            "miner_hotkey": miner_hotkey,
+            "public_key": public_key,
+            "file_info": file_info,
+            "signature": signature,
+            "file_size": file_size,
+        }
+        if tournament_id is not None:
+            body["tournament_id"] = tournament_id
+
         response = await self._request(
             "POST",
             "/api/v1/agents/upload/verify",
-            json={
-                "miner_hotkey": miner_hotkey,
-                "public_key": public_key,
-                "file_info": file_info,
-                "signature": signature,
-                "file_size": file_size,
-            },
+            json=body,
         )
         return UploadToken(**response.json())
 

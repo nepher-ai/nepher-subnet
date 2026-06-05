@@ -108,6 +108,16 @@ class PathsConfig(BaseModel):
             v = resolve_env_vars(v)
         return Path(v).expanduser().resolve()
 
+    def tournament_workspace(self, tournament_id: str) -> Path:
+        """Per-tournament workspace subdirectory.
+
+        Namespacing artifacts by tournament id lets the validator hold setup
+        state (configs, agent registry, eval config) for several concurrently
+        active tournaments at once. The path stays *under* ``workspace`` so the
+        sandbox Docker-in-Docker HOST_WORKSPACE path mapping keeps working.
+        """
+        return self.workspace / "tournaments" / str(tournament_id)
+
     @field_validator("eval_repo_url", mode="before")
     @classmethod
     def resolve_url_vars(cls, v):

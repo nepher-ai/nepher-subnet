@@ -104,96 +104,104 @@ def get_current_period(
 
 class ValidatorStateManager:
     """
-    Manages validator state across tournament phases.
-    
-    Tracks:
-    - Setup completion
-    - Current tournament ID
-    - Evaluation statistics
+    Manages validator state across *multiple concurrent* tournaments.
+
+    Tracks, keyed by tournament id:
+    - Setup completion (per-tournament eval repo / task config)
+    - Last observed period (for transition detection)
+
+    Designed for the multi-tournament scheduler where several tournaments may
+    be in distinct phases simultaneously, so all state is per-tournament.
     """
 
     def __init__(self):
         """Initialize state manager."""
-        self._setup_complete = False
-        self._current_tournament_id: Optional[str] = None
-        self._last_period: Optional[TournamentPeriod] = None
+        self._setup_complete: dict[str, bool] = {}
+        self._last_period: dict[str, TournamentPeriod] = {}
 
-    @property
-    def is_setup_complete(self) -> bool:
-        """Check if setup has been completed for current tournament."""
-        return self._setup_complete
+    # -- Setup tracking -------------------------------------------------------
 
-    @property
-    def current_tournament_id(self) -> Optional[str]:
-        """Get current tournament ID."""
-        return self._current_tournament_id
-
-    def track_tournament(self, tournament_id: str) -> None:
-        """
-        Record the tournament ID we are currently working on.
-
-        Called every loop iteration so that ``check_tournament_change``
-        can detect when a *different* tournament appears.
-
-        Args:
-            tournament_id: Active tournament ID
-        """
-        self._current_tournament_id = tournament_id
+    def is_setup_complete(self, tournament_id: str) -> bool:
+        """Check if setup has been completed for the given tournament."""
+        return self._setup_complete.get(tournament_id, False)
 
     def mark_setup_complete(self, tournament_id: str) -> None:
-        """
-        Mark setup as complete for a tournament.
-        
-        Args:
-            tournament_id: Tournament ID setup was completed for
-        """
-        self._setup_complete = True
-        self._current_tournament_id = tournament_id
+        """Mark setup as complete for a tournament."""
+        self._setup_complete[tournament_id] = True
         logger.info(f"Setup marked complete for tournament: {tournament_id}")
 
-    def check_tournament_change(self, tournament_id: str) -> bool:
-        """
-        Check if tournament has changed (requires reset).
+    def reset_setup(self, tournament_id: str) -> None:
+        """Force a fresh setup for a tournament (e.g. public -> private phase)."""
+        if self._setup_complete.get(tournament_id):
+            logger.info(f"Resetting setup for tournament {tournament_id}")
+        self._setup_complete[tournament_id] = False
 
-        Returns True when *any* new tournament is detected — including
-        the first tournament after a reset (when _current_tournament_id
-        is None).
-        
-        Args:
-            tournament_id: New tournament ID
-            
-        Returns:
-            True if tournament changed or is newly detected
-        """
-        if self._current_tournament_id is None:
-            return True
-        return self._current_tournament_id != tournament_id
+    # -- Period transition tracking ------------------------------------------
 
-    def on_period_change(
+    def get_last_period(self, tournament_id: str) -> Optional[TournamentPeriod]:
+        """Return the last observed period for a tournament (or None)."""
+        return self._last_period.get(tournament_id)
+
+    def update_period(
         self,
-        old_period: TournamentPeriod,
+        tournament_id: str,
         new_period: TournamentPeriod,
-    ) -> None:
+    ) -> Optional[TournamentPeriod]:
         """
-        Handle period transition.
-        
+        Record the current period for a tournament and detect transitions.
+
+        Handles the quiet-zone -> private-evaluation handoff by forcing a
+        fresh setup so the private eval config is re-downloaded.
+
         Args:
-            old_period: Previous period
-            new_period: New period
+            tournament_id: Tournament whose period is being recorded.
+            new_period: The period observed this iteration.
+
+        Returns:
+            The previous period (or None if first observation).
         """
+        old_period = self._last_period.get(tournament_id)
         if old_period != new_period:
-            logger.info(f"Period transition: {old_period.value} → {new_period.value}")
+            old_name = old_period.value if old_period else "none"
+            logger.info(
+                f"[{tournament_id}] Period transition: {old_name} → {new_period.value}"
+            )
             if new_period == TournamentPeriod.QUIET_ZONE:
-                logger.info("Entering quiet zone — stopping evaluations, preparing for private phase")
+                logger.info(
+                    f"[{tournament_id}] Entering quiet zone — stopping evaluations, "
+                    "preparing for private phase"
+                )
             if new_period == TournamentPeriod.EVALUATION:
-                logger.info("Entering private evaluation — resetting setup to download private config")
-                self._setup_complete = False
-            self._last_period = new_period
+                logger.info(
+                    f"[{tournament_id}] Entering private evaluation — resetting setup "
+                    "to download private config"
+                )
+                self.reset_setup(tournament_id)
+        self._last_period[tournament_id] = new_period
+        return old_period
+
+    # -- Pruning / reset ------------------------------------------------------
+
+    def prune(self, active_ids: set[str]) -> None:
+        """Drop state for tournaments that are no longer active.
+
+        Keeps memory bounded and ensures a tournament that re-activates later
+        starts from a clean slate.
+        """
+        for tid in list(self._setup_complete.keys()):
+            if tid not in active_ids:
+                self._setup_complete.pop(tid, None)
+                self._last_period.pop(tid, None)
+                logger.debug(f"Pruned state for inactive tournament {tid}")
+
+    def forget(self, tournament_id: str) -> None:
+        """Remove all tracked state for a single tournament."""
+        self._setup_complete.pop(tournament_id, None)
+        self._last_period.pop(tournament_id, None)
 
     def reset(self) -> None:
         """Reset all state."""
         logger.info("Resetting validator state")
-        self._setup_complete = False
-        self._current_tournament_id = None
-        self._last_period = None
+        self._setup_complete.clear()
+        self._last_period.clear()
 
