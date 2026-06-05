@@ -285,6 +285,18 @@ class AgentEvaluator:
         with open(task_config_path, "r") as f:
             config_data = yaml.safe_load(f)
 
+        # Guard: task_type must be explicit in the stored config. If it is
+        # absent, EvalConfig will silently fall back to its dataclass default
+        # ("navigation.leatherback"), producing a confusing scorer mismatch
+        # when scoring_version is set for a different task family.
+        if not config_data.get("task_type"):
+            raise EvaluationError(
+                f"task_config.yaml for tournament {self.tn_workspace.name} is missing "
+                f"'task_type'. Add the correct task_type (e.g. 'navigation.spot') to "
+                f"the tournament's eval config in the database.",
+                recoverable=False,
+            )
+
         policy_path = self._resolve_policy_path()
         config_data["policy_path"] = policy_path
         logger.info(f"Resolved policy_path (sandbox): {policy_path}")
