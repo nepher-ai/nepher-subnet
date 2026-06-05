@@ -340,12 +340,8 @@ class SetupManager:
 
         Uses the phase-aware active_eval_config endpoint so that the correct
         config (public or private) is served based on the current period.
-
-        Configs are written into the per-tournament workspace so that several
-        concurrently-active tournaments do not clobber each other.
         """
-        workspace = self.config.paths.tournament_workspace(tournament_id)
-        workspace.mkdir(parents=True, exist_ok=True)
+        workspace = self.config.paths.workspace
         
         # Download subnet config
         logger.info("  Downloading subnet configuration...")

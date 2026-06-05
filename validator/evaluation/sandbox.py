@@ -118,7 +118,6 @@ class SandboxRunner:
         task_module: str,
         timeout: int = 3600,
         whitelist_domains: Optional[list[str]] = None,
-        task_config_path: Optional[Path] = None,
     ) -> dict[str, Any]:
         """
         Run agent evaluation in an isolated sandbox container.
@@ -134,8 +133,6 @@ class SandboxRunner:
             timeout: Evaluation timeout in seconds
             whitelist_domains: Domains the sandbox proxy should allow.
                 If empty/None, the entrypoint falls back to built-in defaults.
-            task_config_path: Path to the (per-tournament) task_config.yaml to
-                mount into the sandbox. Defaults to the base workspace copy.
 
         Returns:
             Evaluation result dict with score, metadata, summary
@@ -157,9 +154,7 @@ class SandboxRunner:
 
             # Copy eval config to sandbox config dir
             shutil.copy2(eval_config_path, config_dir / "eval_config.yaml")
-            # Use the explicitly provided (per-tournament) task config when given,
-            # falling back to the base workspace for backward compatibility.
-            task_config = task_config_path or (self.workspace / "task_config.yaml")
+            task_config = self.workspace / "task_config.yaml"
             if task_config.exists():
                 shutil.copy2(task_config, config_dir / "task_config.yaml")
 

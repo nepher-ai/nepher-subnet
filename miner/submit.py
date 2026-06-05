@@ -11,11 +11,10 @@ Handles:
 import time
 import tempfile
 from pathlib import Path
-from typing import Tuple, List, Optional
+from typing import Tuple, List
 
-from nepher_core.api import TournamentAPI, Tournament
+from nepher_core.api import TournamentAPI
 from nepher_core.wallet import load_wallet, get_hotkey, get_public_key, sign_message, create_file_info
-from miner.window import is_submittable, describe_stage  # re-exported for callers
 from nepher_core.utils.helpers import (
     compute_checksum,
     zip_directory,
@@ -85,38 +84,28 @@ def validate_agent_structure(agent_path: Path) -> Tuple[bool, List[str]]:
     return len(errors) == 0, errors
 
 
-async def list_active_tournaments(api_key: str, api_url: str) -> List[Tournament]:
-    """Fetch all currently active tournaments (for targeting/listing)."""
-    async with TournamentAPI(api_key=api_key, base_url=api_url) as api:
-        return await api.get_active_tournaments(subnet=True)
-
-
 async def submit_agent(
     agent_path: Path,
     wallet_name: str,
     wallet_hotkey: str,
     api_key: str,
     api_url: str,
-    tournament_id: Optional[str] = None,
 ) -> str:
     """
-    Submit an agent to a tournament.
-
-    With multiple concurrent tournaments the target must be chosen explicitly
-    via ``tournament_id``. When omitted, the backend auto-selects the single
-    active tournament (and returns an error if more than one is active).
-
+    Submit an agent to the tournament.
+    
+    The active tournament is automatically selected by the backend.
+    
     Args:
         agent_path: Path to agent directory
         wallet_name: Wallet name
         wallet_hotkey: Hotkey name
         api_key: Tournament API key
         api_url: Tournament API URL
-        tournament_id: Optional explicit target tournament id.
-
+        
     Returns:
         Agent ID of the submitted agent
-
+        
     Raises:
         ValueError: If agent validation fails
         APIError: If API request fails
@@ -145,7 +134,7 @@ async def submit_agent(
         
         # Create API client
         async with TournamentAPI(api_key=api_key, base_url=api_url) as api:
-            # Request upload token (this also validates and resolves tournament)
+            # Request upload token (this also validates and gets tournament)
             logger.info("Requesting upload token...")
             token = await api.request_upload_token(
                 miner_hotkey=miner_hotkey,
@@ -153,16 +142,15 @@ async def submit_agent(
                 file_info=file_info,
                 signature=signature,
                 file_size=file_size,
-                tournament_id=tournament_id,
             )
             
-            resolved_tournament_id = token.tournament_id
-            logger.info(f"Using tournament: {resolved_tournament_id}")
+            tournament_id = token.tournament_id
+            logger.info(f"Using tournament: {tournament_id}")
             
             # Upload agent
             logger.info("Uploading agent...")
             agent = await api.upload_agent(
-                tournament_id=resolved_tournament_id,
+                tournament_id=tournament_id,
                 upload_token=token.upload_token,
                 miner_hotkey=miner_hotkey,
                 content_hash=content_hash,
@@ -171,7 +159,7 @@ async def submit_agent(
             
             logger.info(f"✅ Agent submitted successfully!")
             logger.info(f"   Agent ID: {agent.id}")
-            logger.info(f"   Tournament: {resolved_tournament_id}")
+            logger.info(f"   Tournament: {tournament_id}")
             logger.info(f"   Miner Hotkey: {miner_hotkey}")
             
             return agent.id
