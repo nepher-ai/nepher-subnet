@@ -183,6 +183,14 @@ echo "[SANDBOX] Dropping capabilities — firewall is now immutable"
 # Isaac Sim) and re-route argv so that the eval script runs as __main__.
 BOOTSTRAP="import multiprocessing, sys; multiprocessing.set_start_method('spawn', force=True); sys.argv = sys.argv[1:]; import runpy; runpy.run_path(sys.argv[0], run_name='__main__')"
 
+# Disable set -e around the evaluation so a non-zero exit from the eval
+# (e.g. Isaac Sim hanging/crashing on shutdown AFTER a successful run, which
+# makes `timeout` return 124) does NOT abort the entrypoint before the
+# fallback result-file write and log collection below. Without this guard the
+# container exits silently and the validator reports
+# "Sandbox did not produce evaluation_result.json".
+set +e
+
 # Drop capabilities so miner code cannot:
 #   - modify iptables rules  (NET_ADMIN)
 #   - re-grant capabilities  (SETPCAP)
@@ -195,27 +203,30 @@ capsh --drop=cap_net_admin,cap_setpcap,cap_setuid,cap_setgid -- -c "
 "
 
 EVAL_EXIT=$?
-
-if [ $EVAL_EXIT -ne 0 ]; then
-    echo "[SANDBOX] Evaluation exited with code: ${EVAL_EXIT}"
-    if [ $EVAL_EXIT -eq 124 ]; then
-        MSG="Evaluation timed out after ${EVAL_TIMEOUT}s"
-    else
-        MSG="Evaluation script failed with exit code ${EVAL_EXIT}"
-    fi
-    if [ ! -f /sandbox/output/evaluation_result.json ]; then
-        echo "{\"score\": 0, \"metadata\": {\"error\": \"eval_failed\", \"exit_code\": ${EVAL_EXIT}}, \"summary\": \"${MSG}\"}" \
-            > /sandbox/output/evaluation_result.json
-    fi
-fi
+set -e
 
 # ── Collect results ────────────────────────────────────────────
+# Prefer a REAL result file produced by the eval script. The eval may write it
+# under /app (logs dir) and only fail later during sim teardown, so always look
+# for a genuine result BEFORE synthesizing an error result.
 if [ ! -f /sandbox/output/evaluation_result.json ]; then
     FOUND=$(find /app -name "evaluation_result.json" -type f 2>/dev/null | head -1)
     if [ -n "$FOUND" ]; then
         echo "[SANDBOX] Found result at: ${FOUND}"
         cp "$FOUND" /sandbox/output/evaluation_result.json
     fi
+fi
+
+# Only synthesize an error result if the eval failed AND produced nothing.
+if [ $EVAL_EXIT -ne 0 ] && [ ! -f /sandbox/output/evaluation_result.json ]; then
+    echo "[SANDBOX] Evaluation exited with code: ${EVAL_EXIT}"
+    if [ $EVAL_EXIT -eq 124 ]; then
+        MSG="Evaluation timed out after ${EVAL_TIMEOUT}s"
+    else
+        MSG="Evaluation script failed with exit code ${EVAL_EXIT}"
+    fi
+    echo "{\"score\": 0, \"metadata\": {\"error\": \"eval_failed\", \"exit_code\": ${EVAL_EXIT}}, \"summary\": \"${MSG}\"}" \
+        > /sandbox/output/evaluation_result.json
 fi
 
 # Copy eval logs to output for the validator
