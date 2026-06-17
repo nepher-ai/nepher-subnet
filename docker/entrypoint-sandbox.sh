@@ -50,6 +50,22 @@ fi
 echo "[SANDBOX] GPU OK:"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
+# ── Runtime install: nepher (EnvHub) and eval-nav ──────────────
+# Must run BEFORE firewall setup — PyPI and GitHub are blocked after iptables rules apply.
+echo "[SANDBOX] Installing latest nepher (EnvHub)..."
+if ! ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --quiet --no-cache-dir nepher; then
+    write_error "nepher_install_failed" "Failed to install nepher (EnvHub) at container start"
+fi
+echo "[SANDBOX] nepher installed: $(${ISAACLAB_PATH}/isaaclab.sh -p -m pip show nepher | grep ^Version)"
+
+echo "[SANDBOX] Updating eval-nav..."
+if git -C /app/eval-nav pull --quiet; then
+    ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --quiet --no-build-isolation -e /app/eval-nav \
+        || echo "[SANDBOX] WARN: eval-nav reinstall after pull failed — continuing with image-baked version"
+else
+    echo "[SANDBOX] WARN: eval-nav git pull failed — continuing with image-baked version"
+fi
+
 # ── Network firewall (transparent proxy + iptables) ────────────
 echo "[SANDBOX] Setting up network firewall..."
 

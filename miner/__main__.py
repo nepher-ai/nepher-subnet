@@ -4,14 +4,37 @@ Miner CLI entry point.
 Usage:
     python -m miner submit --path ./my-agent --wallet-name miner --wallet-hotkey default
     python -m miner submit --path ./my-agent --config ./config/miner_config.yaml
+
+DEPRECATION NOTICE
+------------------
+``nepher-miner`` is superseded by the unified Nepher CLI (npcli).
+The equivalent commands are:
+
+    nepher-miner submit   →  npcli tournament submit
+    nepher-miner validate →  npcli tournament validate
+    nepher-miner list-active → npcli tournament list-active
+
+Install the unified CLI:
+    pip install --upgrade nepher-cli
+
+nepher-miner will continue to work but will not receive new features.
 """
 
 import argparse
 import asyncio
 import os
 import sys
+import warnings
 from pathlib import Path
 from typing import Optional
+
+warnings.warn(
+    "\n\nDEPRECATION: 'nepher-miner' is superseded by the unified Nepher CLI.\n"
+    "Use 'npcli tournament submit / validate / list-active' instead.\n"
+    "Install: pip install --upgrade nepher-cli\n",
+    DeprecationWarning,
+    stacklevel=1,
+)
 
 from nepher_core.utils.logging import setup_logging, get_logger
 from nepher_core.config.loader import load_config

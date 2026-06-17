@@ -75,9 +75,6 @@ RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir "numpy>=1.24,<
 # Install missing Isaac Lab dependency (prettytable is required by isaaclab.managers)
 RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir prettytable
 
-# Install nepher (envhub) for environment loading
-RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir nepher
-
 # Install dependencies for Issac Lab Extension
 RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir hidapi
 
