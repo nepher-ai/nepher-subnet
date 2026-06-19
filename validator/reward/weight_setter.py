@@ -5,7 +5,7 @@ Handles:
 - Querying winner from API
 - Finding winner UID in metagraph
 - Setting weights on chain
-- Burning on UID 0 as fallback
+- Burning on UID 0 when no winner or weight is unallocated
 - Deduplicating weight sets across CPU/GPU validators sharing a hotkey
 """
 
@@ -409,23 +409,8 @@ class WeightSetter:
                 logger.debug(f"Failed to report weight commit: {e}")
             return
 
-        logger.error(f"Failed to set weights after {max_attempts} attempts")
-
-        is_pure_burn = list(weight_map.keys()) == [self.BURN_UID]
-        if not is_pure_burn:
-            logger.info("Attempting to burn on UID 0 as fallback...")
-            fallback_weights = [0.0] * len(uids)
-            fallback_weights[self.BURN_UID] = 1.0
-
-            try:
-                subtensor.set_weights(
-                    wallet=wallet,
-                    netuid=netuid,
-                    uids=uids,
-                    weights=fallback_weights,
-                    wait_for_inclusion=True,
-                )
-                logger.info("Fallback: burned on UID 0")
-            except Exception as e:
-                logger.error(f"Fallback burn also failed: {e}")
+        logger.error(
+            f"Failed to set weights after {max_attempts} attempts ({desc}); "
+            "leaving existing on-chain weights unchanged"
+        )
 
