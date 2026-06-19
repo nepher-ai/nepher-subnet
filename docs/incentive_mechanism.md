@@ -5,47 +5,38 @@ Incentive mechanism and business logic for Subnet 49 (Nepher) on Bittensor.
 Each tournament proceeds through five sequential periods:
 
 ```
-┌─────────────┬─────────────┬─────────────┬─────────────┬─────────────┐
-│   CONTEST   │   SUBMIT    │ EVALUATION  │   REVIEW    │   REWARD    │
-│   PERIOD    │   PERIOD    │   PERIOD    │   PERIOD    │   PERIOD    │
-├─────────────┼─────────────┼─────────────┼─────────────┼─────────────┤
-│ Miners      │ Eligibility │ Validators  │ Admin       │ Winner gets │
-│ submit      │ snapshot    │ evaluate    │ reviews &   │ all weight  │
-│ agents      │ locked      │ agents      │ approves    │             │
-└─────────────┴─────────────┴─────────────┴─────────────┴─────────────┘
+┌────────────┬────────────┬────────────┬────────────┬────────────┐
+│  CONTEST   │   SUBMIT   │ EVALUATION │   REVIEW   │   REWARD   │
+├────────────┼────────────┼────────────┼────────────┼────────────┤
+│ Miners     │ Eligibility│ Validators │ Admin      │ Winner     │
+│ submit     │ snapshot   │ evaluate & │ reviews &  │ receives   │
+│ agents     │ locked     │ score      │ approves   │ weight     │
+└────────────┴────────────┴────────────┴────────────┴────────────┘
 ```
 
-- **Contest Period**: Miners train policies locally and submit agents to the tournament backend. Submissions are signed with the miner's Bittensor hotkey.
-- **Submit Period**: The eligible miner list is snapshotted from the metagraph — only miners who are registered on-chain *and* have submitted an agent are included. The snapshot is then locked. Only the latest agent per miner is scored.
-- **Evaluation Period**: Validators download each eligible agent, install its task module, and run it against standardized Isaac Lab environments via `eval-nav`. Scores are submitted back to the tournament backend.
-- **Review Period**: The admin team reviews aggregated scores and verifies the top submission to confirm no cheating before approving the winner.
-- **Reward Period**: Validators set all on-chain weight to the approved winner's UID. Weights are refreshed hourly for the duration of the period.
+- **Contest**: Miners train policies locally and submit agents (signed with their Bittensor hotkey).
+- **Submit**: The eligible miner list is snapshotted from the metagraph — only registered miners with an active submission are included. The list locks before evaluation. Only the latest agent per miner is scored.
+- **Evaluation**: Validators download each eligible agent and run it against standardized Isaac Lab environments via `eval-nav`. Scores are submitted to the tournament backend and aggregated via stake-weighted averaging (ties broken by earliest submission time).
+- **Review**: The admin team verifies the top submission to confirm no cheating and approves the winner.
+- **Reward**: Validators direct all remaining on-chain weight to the approved winner's UID, refreshed hourly.
 
-All period boundaries are defined by Bittensor block numbers, converted to Unix timestamps by the backend.
+Period boundaries are defined by Bittensor block numbers, converted to Unix timestamps by the backend.
 
-## Incentive Mechanism
+## Weight Distribution
 
-### Winner-Takes-All
+Multiple tournaments can be active simultaneously. Validators emit a single combined weight vector each cycle:
 
-Only a single top-performing miner receives weight (and thus emissions) per tournament.
+- Each **non-reward** tournament allocates **1% (fixed)** to its current preliminary leader (if present in the metagraph).
+- The **reward-period** tournament's approved winner receives all remaining weight (`1 − 1% × N leaders`).
+- Anything unresolved — no active tournaments, no approved winner, or winner not in metagraph — **burns on UID 0**.
 
-### Scoring
+Tournament reward periods never overlap by design. Weights are processed in deterministic (ID-sorted) order; identical weight sets committed within 15 minutes are deduplicated and skipped.
 
-Validator scores are aggregated using stake-weighted averaging. Each validator's score for an agent is weighted by that validator's stake on the subnet. If no validator has stake, a simple average is used as fallback. Rankings are determined by aggregated score descending, with ties broken by earliest submission time.
-
-### Emission Distribution
-
-Outside the reward period — during contest, submit period, evaluation, and review — validators set weight to UID 0 (burn). Emissions are only directed to the winner during the reward period. After the reward period ends, weight returns to UID 0.
-
-The emission schedule is sparse and episodic. Continuous daily rewards are avoided to reduce sell pressure and preserve alpha token scarcity. Alpha is treated as prize capital, not recurring income.
-
-### Performance Thresholds
-
-If no miner meets the threshold, or if the admin does not approve a winner, all weight is directed to UID 0 (burn) and no emissions are distributed.
+The **winner-takes-all** structure is episodic by design — avoiding continuous daily rewards reduces sell pressure and preserves alpha token scarcity.
 
 ## Miner Eligibility
 
-- Eligibility requires both on-chain registration (present in the metagraph) and an agent submission during the contest/submit period. The eligible miner list is periodically synced during the submit period and locked before evaluation begins.
+- Requires both on-chain registration (present in the metagraph) **and** an agent submission during the contest or submit period.
 - If an eligible miner is deregistered before or during evaluation/reward, it still receives its reward. The owner team will notify them to re-register. Hotkey-based emission is mandatory.
 
 ---
