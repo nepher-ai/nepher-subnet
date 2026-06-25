@@ -116,13 +116,28 @@ async def download_environments(
 ) -> None:
     """
     Download required environments using nepher (envhub).
-    
+
+    Authenticates with the EnvHub API key directly (sent as ``X-API-Key``).
+    The backend verifies the key against account-backend on every request, so
+    environment downloads succeed reliably for the lifetime of the key and are
+    not affected by JWT access-token expiry — which previously caused
+    intermittent "token expired" failures during long validator runs.
+
     Args:
         env_ids: List of environment IDs to download
         cache_path: Optional custom cache path
         category: Environment category (default: "navigation")
-        api_key: Optional API key for envhub authentication
+        api_key: API key for envhub authentication
     """
+    # Normalize empty/whitespace keys to None so the client surfaces a clear
+    # auth error instead of silently sending an unusable credential.
+    api_key = api_key.strip() if api_key else None
+    if not api_key:
+        logger.warning(
+            "No EnvHub API key configured (tournament.api_key / NEPHER_API_KEY). "
+            "Environment downloads may fail for non-public bundles."
+        )
+
     try:
         from nepher.storage.cache import get_cache_manager
         from nepher.api.client import get_client
