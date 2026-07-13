@@ -175,10 +175,11 @@ class WeightSetter:
         Rules (see incentive mechanism / plan):
         - Each tournament NOT in its reward period contributes ``LEADER_WEIGHT_FRACTION``
           (1%) to its current preliminary leader, if that leader resolves to a UID.
-        - The single tournament in its reward period gives its approved winner all
-          remaining weight (``1 - sum(fixed allocations)``).
-        - If there is no reward tournament (or its winner is unavailable/not in the
-          metagraph), the remainder burns on UID 0.
+        - Among tournaments in their reward period, prefer one with an approved
+          winner for the remainder (``1 - sum(fixed allocations)``). Confirmed
+          no-winner tournaments may legally overlap and are skipped for remainder.
+        - If there is no reward tournament with an approved winner (or its winner
+          is unavailable/not in the metagraph), the remainder burns on UID 0.
         - Duplicate UIDs (leader == winner == burn) are merged by addition; the
           final map is normalized to sum to 1.0.
 
@@ -227,30 +228,41 @@ class WeightSetter:
                 f"UID {leader_uid} (leader)"
             )
 
-        # Resolve the remainder recipient: the single reward winner, else burn.
+        # Resolve the remainder recipient: prefer a reward tournament with an
+        # approved winner. Confirmed no-winner tournaments may legally share a
+        # reward window with another tournament and must not steal the remainder.
         winner_uid: Optional[int] = None
         if reward_tournaments:
             if len(reward_tournaments) > 1:
-                # Reward periods are validated to never overlap; if we still see
-                # more than one, behave defensively: pick the earliest-starting
-                # reward tournament and burn the rest's share.
                 ids = ", ".join(str(t.id) for t in reward_tournaments)
-                logger.error(
+                logger.warning(
                     f"Multiple tournaments in reward period simultaneously ({ids}); "
-                    "using the earliest reward_start_time and burning the rest"
+                    "preferring one with an approved winner (no-winner windows may overlap)"
                 )
                 reward_tournaments.sort(
                     key=lambda t: (t.reward_start_time or 0, str(t.id))
                 )
-            chosen = reward_tournaments[0]
-            resolved = await self._get_winner_uid(chosen.id, metagraph)
-            # ``_get_winner_uid`` returns BURN_UID when there is no approved
-            # winner; treat that as "burn" (None) for the math.
-            winner_uid = resolved if resolved != self.BURN_UID else None
-            logger.info(
-                f"[{chosen.id}] reward winner UID "
-                f"{resolved} receives the remainder"
-            )
+
+            chosen = None
+            for candidate in reward_tournaments:
+                resolved = await self._get_winner_uid(candidate.id, metagraph)
+                # ``_get_winner_uid`` returns BURN_UID when there is no approved
+                # winner; skip those and keep looking for a real winner.
+                if resolved != self.BURN_UID:
+                    chosen = candidate
+                    winner_uid = resolved
+                    logger.info(
+                        f"[{chosen.id}] reward winner UID "
+                        f"{resolved} receives the remainder"
+                    )
+                    break
+
+            if chosen is None:
+                # All overlapping reward tournaments burn (e.g. only no-winner).
+                logger.info(
+                    "No approved reward winner among overlapping reward "
+                    "tournaments — remainder burns on UID 0"
+                )
 
         return compute_weight_distribution(
             leader_uids,

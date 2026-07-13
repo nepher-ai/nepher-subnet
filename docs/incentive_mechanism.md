@@ -30,7 +30,10 @@ Multiple tournaments can be active simultaneously. Validators emit a single comb
 - The **reward-period** tournament's approved winner receives all remaining weight (`1 − 1% × N leaders`).
 - Anything unresolved — no active tournaments, no approved winner, or winner not in metagraph — **burns on UID 0**.
 
-Tournament reward periods never overlap by design. Weights are processed in deterministic (ID-sorted) order; identical weight sets committed within 15 minutes are deduplicated and skipped.
+Tournament reward periods must not overlap, except when a tournament has confirmed
+no winner — that tournament's reward window may be overlapped by another. Weights
+are processed in deterministic (ID-sorted) order; identical weight sets committed
+within 15 minutes are deduplicated and skipped.
 
 The **winner-takes-all** structure is episodic by design — avoiding continuous daily rewards reduces sell pressure and preserves alpha token scarcity.
 
