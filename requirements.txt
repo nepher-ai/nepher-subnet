@@ -1,7 +1,12 @@
 # Nepher Subnet Dependencies
 # Core dependencies
-bittensor>=7.0.0
-bittensor-wallet>=2.0.0
+# Floor raised to 10.5.0: finney runtime spec_version 432 wraps the
+# neurons_lite netuid param in a Composite; older bittensor / ASI <2
+# encode it as a bare u16 and metagraph sync fails with
+# "Invalid type for data ... Composite".
+bittensor>=10.5.0,<11
+bittensor-wallet>=4.1.0
+async-substrate-interface>=2.2.1,<3
 httpx>=0.25.0
 pyyaml>=6.0
 pydantic>=2.0.0

@@ -46,8 +46,9 @@ COPY nepher_core/ ./nepher_core/
 COPY validator/ ./validator/
 COPY pyproject.toml .
 
-# Install package
-RUN pip install --no-cache-dir "async-substrate-interface<2.0.0" .
+# Install package (bittensor>=10.5 pulls async-substrate-interface>=2.2 for
+# finney Composite netuid encoding — do not pin ASI <2)
+RUN pip install --no-cache-dir .
 
 # Create directories for runtime
 RUN mkdir -p /app/config /app/workspace /app/logs \

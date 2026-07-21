@@ -25,8 +25,9 @@ COPY nepher_core/ ./nepher_core/
 COPY miner/ ./miner/
 COPY pyproject.toml .
 
-# Install packages
-RUN pip install --no-cache-dir "async-substrate-interface<2.0.0" .
+# Install packages (bittensor>=10.5 pulls async-substrate-interface>=2.2 for
+# finney Composite netuid encoding — do not pin ASI <2)
+RUN pip install --no-cache-dir .
 
 # Create non-root user
 RUN useradd -m -s /bin/bash nepher
