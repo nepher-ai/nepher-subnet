@@ -127,7 +127,7 @@ Your score is written to `evaluation_result.json`.
 ## Resources
 
 - Website: https://nepher.ai · Docs: https://docs.nepher.ai · Dashboard: https://tournament.nepher.ai
-- Account/API keys: https://account.nepher.ai · Discord: https://discord.gg/nepher
+- Account/API keys: https://account.nepher.ai · Discord: https://discord.gg/qZUc3vdjVq
 - Task repo: linked per-tournament on the dashboard/Discord (always read its README) · [eval-nav](https://github.com/nepher-ai/eval-nav) · [envhub](https://github.com/nepher-ai/envhub)
 - [Isaac Lab install guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html)
 

@@ -96,7 +96,7 @@ nepher-validator run --config config/validator_config.yaml [--verbose] [--json-l
 
 - **Website:** https://nepher.ai
 - **Docs:** https://docs.nepher.ai
-- **Discord:** https://discord.gg/nepher
+- **Discord:** https://discord.gg/qZUc3vdjVq
 
 ## License
 

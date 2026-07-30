@@ -150,5 +150,5 @@ docker compose logs -f validator-cpu
 ## Need Help?
 
 - **Docs:** https://docs.nepher.ai
-- **Discord:** https://discord.gg/nepher
+- **Discord:** https://discord.gg/qZUc3vdjVq
 - **Issues:** https://github.com/nepher-ai/nepher-subnet/issues
