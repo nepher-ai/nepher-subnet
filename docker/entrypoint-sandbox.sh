@@ -197,7 +197,7 @@ echo "[SANDBOX] Dropping capabilities — firewall is now immutable"
 
 # Python multiprocessing bootstrap: force 'spawn' start method (required by
 # Isaac Sim 6.x / Python 3.12) and re-route argv so that the eval script runs
-# as __main__. AppLauncher still accepts --headless in Isaac Lab 3.0.
+# as __main__. Isaac Lab 3.0 rejects --headless; --viz none disables visualizers.
 BOOTSTRAP="import multiprocessing, sys; multiprocessing.set_start_method('spawn', force=True); sys.argv = sys.argv[1:]; import runpy; runpy.run_path(sys.argv[0], run_name='__main__')"
 
 # Disable set -e around the evaluation so a non-zero exit from the eval
@@ -216,7 +216,7 @@ capsh --drop=cap_net_admin,cap_setpcap,cap_setuid,cap_setgid -- -c "
     timeout ${EVAL_TIMEOUT} ${ISAACLAB_PATH}/isaaclab.sh -p -c \"${BOOTSTRAP}\" \
         \"${EVAL_SCRIPT}\" \
         --config \"${EVAL_CONFIG}\" \
-        --headless 2>&1
+        --viz none 2>&1
 "
 
 EVAL_EXIT=$?

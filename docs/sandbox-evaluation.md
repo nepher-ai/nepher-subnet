@@ -16,7 +16,7 @@ Validators never run Isaac Sim directly. For each agent, the validator spawns an
    - Install `nepher` (EnvHub) + update `eval-nav` (before firewall).
    - Activate network firewall — all outbound blocked except whitelisted domains.
    - `pip install` miner's task module from `agent/source/<TASK_MODULE>`.
-   - Run: `isaaclab.sh -p evaluate.py --config eval_config.yaml --headless`
+   - Run: `isaaclab.sh -p evaluate.py --config eval_config.yaml --viz none`
    - Write `evaluation_result.json` to `/sandbox/output/`.
 5. **Submit** — validator reads `score` from the result file and posts it to the Tournament API.
 

@@ -56,7 +56,7 @@ npcli login --api-key nepher_xxxxxxxx             # or run `npcli login` and pas
 Use the training/play scripts and task IDs documented in the repo README. Train on the **generic training task** — validators benchmark on hidden EnvHub datasets, so a policy that generalizes well beats one overfit to specific scenes:
 
 ```bash
-${ISAACLAB_PATH}/isaaclab.sh -p scripts/rsl_rl/train.py --task=<train-task> --headless
+${ISAACLAB_PATH}/isaaclab.sh -p scripts/rsl_rl/train.py --task=<train-task> --viz none
 ```
 
 Play/test a checkpoint as shown in the README, then copy your best checkpoint to the required submission location:
@@ -117,7 +117,7 @@ Run it:
 
 ```bash
 ${ISAACLAB_PATH}/isaaclab.sh -p ./eval-nav/scripts/evaluate.py \
-    --config eval_config.yaml --headless
+    --config eval_config.yaml --viz none
 ```
 
 Your score is written to `evaluation_result.json`.
