@@ -196,7 +196,8 @@ echo "[SANDBOX] Running evaluation (timeout: ${EVAL_TIMEOUT}s)..."
 echo "[SANDBOX] Dropping capabilities — firewall is now immutable"
 
 # Python multiprocessing bootstrap: force 'spawn' start method (required by
-# Isaac Sim) and re-route argv so that the eval script runs as __main__.
+# Isaac Sim 6.x / Python 3.12) and re-route argv so that the eval script runs
+# as __main__. AppLauncher still accepts --headless in Isaac Lab 3.0.
 BOOTSTRAP="import multiprocessing, sys; multiprocessing.set_start_method('spawn', force=True); sys.argv = sys.argv[1:]; import runpy; runpy.run_path(sys.argv[0], run_name='__main__')"
 
 # Disable set -e around the evaluation so a non-zero exit from the eval

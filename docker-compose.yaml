@@ -44,7 +44,7 @@ services:
       - miner
 
   # =========================================================================
-  # Sandbox Image (GPU - Isaac Sim - Agent Evaluation)
+  # Sandbox Image (GPU - Isaac Sim 6.1 + Isaac Lab 3.0 - Agent Evaluation)
   # NOT a running service. Built here so `docker-compose build` creates it.
   # The validator spawns sandbox containers on-demand via Docker socket.
   # =========================================================================
@@ -54,7 +54,9 @@ services:
       dockerfile: docker/Dockerfile.sandbox
       args:
         - EVAL_REPO_URL=${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}
-    image: nepher-sandbox:latest
+        # Pin to an Isaac Lab 3.0-compatible eval-nav commit/tag before shipping.
+        - EVAL_REPO_REF=${EVAL_REPO_REF:-}
+    image: nepher-sandbox:isaacsim6.1-lab3.0
     # This service is never started directly — it only exists so `docker compose build`
     # creates the image. The entrypoint immediately exits, and restart is disabled.
     entrypoint: ["echo", "sandbox image built — this service does not run"]
@@ -97,7 +99,7 @@ services:
       - EVAL_REPO_URL=${EVAL_REPO_URL:-https://github.com/nepher-ai/eval-nav.git}
       - NEPHER_CACHE_DIR=/root/.cache/nepher
       # Sandbox image name (must match the image built above)
-      - SANDBOX_IMAGE=nepher-sandbox:latest
+      - SANDBOX_IMAGE=nepher-sandbox:isaacsim6.1-lab3.0
       # Host-side path mapping for Docker-in-Docker volume mounts.
       # The validator runs inside a container but spawns sandbox containers
       # via the host Docker daemon, so -v paths must be HOST paths.

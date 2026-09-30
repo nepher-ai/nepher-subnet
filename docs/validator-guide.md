@@ -18,7 +18,7 @@ This guide walks through deploying a **Bittensor Subnet 49 validator** using Doc
 | **RAM** | 32 GB | 64 GB+ |
 | **Disk** | 100 GB SSD | 200 GB+ NVMe |
 | **OS** | Ubuntu 22.04 LTS | Ubuntu 22.04 LTS |
-| **NVIDIA Driver / CUDA** | 535+ / 12.1+ | Latest stable / 12.1+ |
+| **NVIDIA Driver / CUDA** | 580+ / 12.8+ | 595.58.03+ / 12.8+ (Isaac Sim 6.1 tested) |
 
 **Software:** Docker + Compose, Git. Most GPU cloud providers ship drivers and Docker pre-installed — skip to [Step 3](#3-bittensor-wallet) if so.
 
@@ -35,7 +35,8 @@ nvidia-smi  # If this fails, install drivers below
 <details><summary><b>Install NVIDIA drivers</b></summary>
 
 ```bash
-sudo apt install -y nvidia-driver-535 && sudo reboot
+# Isaac Sim 6.1 was tested on Linux driver 595.58.03; use a recent 580+/595.x production driver.
+sudo apt install -y nvidia-driver-580 && sudo reboot
 ```
 </details>
 
@@ -112,7 +113,7 @@ wallet:
 
 > Shared settings live in `config/common_config.yaml` (ships with repo) and are merged automatically.
 
-Build the images, then start the validator. The first build is heavy because it builds the GPU `sandbox` image (Isaac Sim ~20 GB); the validator won't start until it completes:
+Build the images, then start the validator. The first build is heavy because it builds the GPU `sandbox` image (`nepher-sandbox:isaacsim6.1-lab3.0`, Isaac Sim 6.1 + Isaac Lab 3.0, ~20 GB); the validator won't start until it completes. Pin `EVAL_REPO_REF` in `.env` to an Isaac Lab 3.0-compatible `eval-nav` commit/tag before shipping:
 
 ```bash
 docker compose build                    # Builds validator + sandbox — 30–60 min first time

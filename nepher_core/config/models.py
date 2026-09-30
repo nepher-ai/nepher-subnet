@@ -86,8 +86,8 @@ class WalletConfig(BaseModel):
 class IsaacConfig(BaseModel):
     """Isaac Lab/Sim version configuration."""
     
-    lab_version: str = Field(default="2.3.0", description="Isaac Lab version")
-    sim_version: str = Field(default="5.1", description="Isaac Sim version")
+    lab_version: str = Field(default="3.0.0", description="Isaac Lab version")
+    sim_version: str = Field(default="6.1", description="Isaac Sim version")
 
 
 class PathsConfig(BaseModel):
