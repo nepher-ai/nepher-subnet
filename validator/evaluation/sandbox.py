@@ -18,7 +18,7 @@ from nepher_core.utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Default sandbox image name
-DEFAULT_SANDBOX_IMAGE = "nepher-sandbox:latest"
+DEFAULT_SANDBOX_IMAGE = "nepher-sandbox:isaacsim6.1-lab3.0"
 
 # Container resource limits
 DEFAULT_MEMORY_LIMIT = "32g"

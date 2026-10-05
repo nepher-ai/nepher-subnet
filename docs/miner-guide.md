@@ -11,7 +11,7 @@ Your job as a miner: **train a policy → submit**. Validators handle the rest. 
 ## 1. Prerequisites
 
 - **GPU** for training (NVIDIA, 24 GB+ VRAM). Submission itself is CPU-only.
-- **Python 3.10+**, **Isaac Sim 5.1**, **Isaac Lab 2.3.0**.
+- **Python 3.12**, **Isaac Sim 6.1**, **Isaac Lab 3.0.0** (agents trained on Isaac Lab 2.x must be ported before submission).
 - **Bittensor wallet** registered on Subnet 49.
 - **Nepher API key** — get one at https://account.nepher.ai → API Keys.
 
@@ -56,7 +56,7 @@ npcli login --api-key nepher_xxxxxxxx             # or run `npcli login` and pas
 Use the training/play scripts and task IDs documented in the repo README. Train on the **generic training task** — validators benchmark on hidden EnvHub datasets, so a policy that generalizes well beats one overfit to specific scenes:
 
 ```bash
-${ISAACLAB_PATH}/isaaclab.sh -p scripts/rsl_rl/train.py --task=<train-task> --headless
+${ISAACLAB_PATH}/isaaclab.sh -p scripts/rsl_rl/train.py --task=<train-task> --viz none
 ```
 
 Play/test a checkpoint as shown in the README, then copy your best checkpoint to the required submission location:
@@ -117,7 +117,7 @@ Run it:
 
 ```bash
 ${ISAACLAB_PATH}/isaaclab.sh -p ./eval-nav/scripts/evaluate.py \
-    --config eval_config.yaml --headless
+    --config eval_config.yaml --viz none
 ```
 
 Your score is written to `evaluation_result.json`.
@@ -129,7 +129,7 @@ Your score is written to `evaluation_result.json`.
 - Website: https://nepher.ai · Docs: https://docs.nepher.ai · Dashboard: https://tournament.nepher.ai
 - Account/API keys: https://account.nepher.ai · Discord: https://discord.gg/qZUc3vdjVq
 - Task repo: linked per-tournament on the dashboard/Discord (always read its README) · [eval-nav](https://github.com/nepher-ai/eval-nav) · [envhub](https://github.com/nepher-ai/envhub)
-- [Isaac Lab install guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html)
+- [Isaac Lab 3.0 install guide](https://isaac-sim.github.io/IsaacLab/develop/source/setup/installation/index.html) (requires Isaac Sim 6.1 + Python 3.12)
 
 ---
 

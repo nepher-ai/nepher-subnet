@@ -27,7 +27,7 @@ echo "[PRE-FLIGHT] Docker daemon OK"
 docker version --format '  Server: {{.Server.Version}}  Client: {{.Client.Version}}'
 
 # ── Verify / auto-build sandbox image ─────────────────────────
-SANDBOX_IMAGE=${SANDBOX_IMAGE:-nepher-sandbox:latest}
+SANDBOX_IMAGE=${SANDBOX_IMAGE:-nepher-sandbox:isaacsim6.1-lab3.0}
 echo "[PRE-FLIGHT] Checking sandbox image: ${SANDBOX_IMAGE}"
 
 if ! docker image inspect "${SANDBOX_IMAGE}" &>/dev/null; then
@@ -43,10 +43,13 @@ if ! docker image inspect "${SANDBOX_IMAGE}" &>/dev/null; then
         exit 1
     fi
 
-    # Pass through the EVAL_REPO_URL build arg if set
+    # Pass through eval-nav build args if set
     BUILD_ARGS=""
     if [ -n "${EVAL_REPO_URL}" ]; then
-        BUILD_ARGS="--build-arg EVAL_REPO_URL=${EVAL_REPO_URL}"
+        BUILD_ARGS="${BUILD_ARGS} --build-arg EVAL_REPO_URL=${EVAL_REPO_URL}"
+    fi
+    if [ -n "${EVAL_REPO_REF}" ]; then
+        BUILD_ARGS="${BUILD_ARGS} --build-arg EVAL_REPO_REF=${EVAL_REPO_REF}"
     fi
 
     if docker build ${BUILD_ARGS} -f "${DOCKERFILE}" -t "${SANDBOX_IMAGE}" "${BUILD_CONTEXT}"; then

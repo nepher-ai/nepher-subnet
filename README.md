@@ -16,7 +16,7 @@ miner/    validator/
                │
                ▼  docker run (per agent, ephemeral)
           nepher-sandbox
-          (Isaac Sim 5.1 + Isaac Lab — GPU)
+          (Isaac Sim 6.1 + Isaac Lab 3.0 — GPU)
 ```
 
 The validator is a **lightweight orchestrator** — it never runs Isaac Sim directly. For each agent, it spawns an ephemeral `nepher-sandbox` container (~20 GB image), mounts the agent and benchmark environments read-only, runs evaluation, then removes the container. This isolates untrusted miner code from the validator wallet and host network.
@@ -49,7 +49,7 @@ nepher-miner submit --path ./my-agent --config config/miner_config.yaml
 
 ### Validators (GPU)
 
-Requires NVIDIA GPU (A100+ recommended), Isaac Sim 5.1, Isaac Lab 2.3.0, Docker + NVIDIA Container Toolkit.
+Requires NVIDIA GPU (A100+ recommended), Isaac Sim 6.1, Isaac Lab 3.0.0, NVIDIA driver 580+ (595.x recommended), Docker + NVIDIA Container Toolkit.
 
 ```bash
 git clone https://github.com/nepher-ai/nepher-subnet.git && cd nepher-subnet

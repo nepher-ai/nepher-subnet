@@ -65,11 +65,56 @@ def verify_isaac_installation(
     
     logger.info(f"Isaac Lab path: {isaaclab_path}")
     logger.info(f"Isaac Sim path: {isaacsim_path}")
-    
-    # TODO: Add version checking when Isaac Lab provides a reliable way
-    # For now, just verify the paths exist
-    logger.info(f"Expected Isaac Lab {expected_lab_version}, Isaac Sim {expected_sim_version}")
-    
+    logger.info(
+        f"Expected Isaac Lab {expected_lab_version}, Isaac Sim {expected_sim_version}"
+    )
+
+    # Prefer VERSION file shipped with the Isaac Sim binary install.
+    sim_version_file = Path(isaacsim_path) / "VERSION"
+    if sim_version_file.exists():
+        try:
+            sim_version_text = sim_version_file.read_text(encoding="utf-8").strip()
+            logger.info(f"Isaac Sim VERSION file: {sim_version_text}")
+            if expected_sim_version and expected_sim_version not in sim_version_text:
+                logger.warning(
+                    f"Isaac Sim version mismatch: expected '{expected_sim_version}' "
+                    f"in '{sim_version_text}'"
+                )
+                return False
+        except OSError as exc:
+            logger.warning(f"Could not read Isaac Sim VERSION file: {exc}")
+
+    # Probe the installed isaaclab package version when importable.
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import importlib.metadata as m; print(m.version('isaaclab'))",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode == 0:
+            lab_version_text = result.stdout.strip()
+            logger.info(f"Installed isaaclab package version: {lab_version_text}")
+            if expected_lab_version and not lab_version_text.startswith(
+                expected_lab_version
+            ):
+                logger.warning(
+                    f"Isaac Lab version mismatch: expected '{expected_lab_version}', "
+                    f"found '{lab_version_text}'"
+                )
+                return False
+        else:
+            logger.debug(
+                f"Could not query isaaclab package version: {result.stderr.strip()}"
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug(f"isaaclab version probe skipped: {exc}")
+
     return True
 
 

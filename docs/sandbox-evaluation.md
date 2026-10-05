@@ -2,7 +2,7 @@
 
 **Nepher Robotics · Bittensor Subnet 49**
 
-Validators never run Isaac Sim directly. For each agent, the validator spawns an ephemeral **`nepher-sandbox`** Docker container (~20 GB, Isaac Sim 5.1 + Isaac Lab 2.3.2), runs evaluation inside it, reads the score, then discards the container. Untrusted miner code is fully isolated — it cannot reach the validator, the host, or any other agent.
+Validators never run Isaac Sim directly. For each agent, the validator spawns an ephemeral **`nepher-sandbox`** Docker container (~20 GB, Isaac Sim 6.1 + Isaac Lab 3.0.0), runs evaluation inside it, reads the score, then discards the container. Untrusted miner code is fully isolated — it cannot reach the validator, the host, or any other agent.
 
 ---
 
@@ -10,13 +10,13 @@ Validators never run Isaac Sim directly. For each agent, the validator spawns an
 
 1. **Download** — validator downloads the miner's agent ZIP from the Tournament API.
 2. **Configure** — writes `eval_config.yaml` (task, scenes, seeds, policy path) to a per-eval workspace.
-3. **Spawn sandbox** — `docker run nepher-sandbox` with GPU, resource limits, and a network whitelist.
+3. **Spawn sandbox** — `docker run nepher-sandbox:isaacsim6.1-lab3.0` with GPU, resource limits, and a network whitelist.
 4. **Inside the container:**
    - GPU pre-flight (`nvidia-smi`) — failure → `score: 0`, exit.
    - Install `nepher` (EnvHub) + update `eval-nav` (before firewall).
    - Activate network firewall — all outbound blocked except whitelisted domains.
    - `pip install` miner's task module from `agent/source/<TASK_MODULE>`.
-   - Run: `isaaclab.sh -p evaluate.py --config eval_config.yaml --headless`
+   - Run: `isaaclab.sh -p evaluate.py --config eval_config.yaml --viz none`
    - Write `evaluation_result.json` to `/sandbox/output/`.
 5. **Submit** — validator reads `score` from the result file and posts it to the Tournament API.
 
