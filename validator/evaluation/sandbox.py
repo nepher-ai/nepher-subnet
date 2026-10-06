@@ -287,7 +287,7 @@ class SandboxRunner:
             await self._wait_for_brain_sockets(socket_dir, replicas, timeout=120)
             smoke_cmd = [
                 "docker", "exec", brain_name,
-                "nepher-brain", "smoke", "--socket", "/run/brain/brain-0.sock",
+                "nepher-brain-comm", "smoke", "--socket", "/run/brain/brain-0.sock",
             ]
             returncode, stdout, stderr = await self._run_cmd(smoke_cmd, timeout=180)
             if returncode != 0:
@@ -338,7 +338,7 @@ class SandboxRunner:
         ]
         if max_submission_gb is not None:
             cmd.extend(["-e", f"NEPHER_MAX_SUBMISSION_GB={max_submission_gb}"])
-        cmd.extend([image, "nepher-brain", "check"])
+        cmd.extend([image, "nepher-brain-comm", "check"])
         return cmd
 
     def _build_brain_serve_cmd(
@@ -369,7 +369,7 @@ class SandboxRunner:
         ]
         if max_submission_gb is not None:
             cmd.extend(["-e", f"NEPHER_MAX_SUBMISSION_GB={max_submission_gb}"])
-        cmd.extend([image, "nepher-brain", "serve", "--replicas", str(replicas)])
+        cmd.extend([image, "nepher-brain-comm", "serve", "--replicas", str(replicas)])
         return cmd
 
     async def _wait_for_brain_sockets(self, socket_dir: Path, replicas: int, timeout: float) -> None:

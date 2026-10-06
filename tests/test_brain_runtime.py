@@ -149,13 +149,13 @@ def test_brain_docker_commands(tmp_path: Path):
     sockets = tmp_path / "sockets"
     check = runner._build_brain_check_cmd(submission, IMAGE, 40)
     assert check[:6] == ["docker", "run", "--rm", "--network", "none", "-v"]
-    assert check[-3:] == [IMAGE, "nepher-brain", "check"]
+    assert check[-3:] == [IMAGE, "nepher-brain-comm", "check"]
     assert f"{submission.resolve()}:/submission:ro" in check
     serve = runner._build_brain_serve_cmd("nepher-brain-1", submission, sockets, IMAGE, 2, 40)
     assert "--network" in serve and "none" in serve
     assert "--read-only" in serve
     assert "--cap-drop" in serve and "ALL" in serve
-    assert serve[-4:] == ["nepher-brain", "serve", "--replicas", "2"]
+    assert serve[-4:] == ["nepher-brain-comm", "serve", "--replicas", "2"]
     world = runner._build_docker_cmd(
         container_name="nepher-sandbox-1",
         agent_registry=submission,

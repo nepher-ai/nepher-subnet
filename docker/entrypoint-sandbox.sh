@@ -79,12 +79,12 @@ if [ "${RUNTIME}" = "brain" ]; then
     if ! ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-deps --no-cache-dir "${TASK_PACKAGE}"; then
         write_error "task_package_install_failed" "Failed to install pinned task package"
     fi
-    if ! ${ISAACLAB_PATH}/isaaclab.sh -p -c "import nepher_brain" >/dev/null 2>&1; then
-        if [ -z "${NEPHER_BRAIN_PACKAGE}" ]; then
-            write_error "task_package_install_failed" "nepher_brain is not installed and NEPHER_BRAIN_PACKAGE is unset"
+    if ! ${ISAACLAB_PATH}/isaaclab.sh -p -c "import nepher_brain_comm" >/dev/null 2>&1; then
+        if [ -z "${NEPHER_BRAIN_COMM_PACKAGE}" ]; then
+            write_error "task_package_install_failed" "nepher_brain_comm is not installed and NEPHER_BRAIN_COMM_PACKAGE is unset"
         fi
-        if ! ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir "${NEPHER_BRAIN_PACKAGE}"; then
-            write_error "task_package_install_failed" "Failed to install nepher-brain"
+        if ! ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir "${NEPHER_BRAIN_COMM_PACKAGE}"; then
+            write_error "task_package_install_failed" "Failed to install nepher-brain-comm"
         fi
     fi
 fi
