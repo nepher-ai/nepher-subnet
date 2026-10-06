@@ -13,8 +13,8 @@ import tempfile
 from pathlib import Path
 from typing import Tuple, List, Optional
 
+from miner.brain_layout import validate_brain_agent_structure
 from nepher_core.api import TournamentAPI, Tournament
-from nepher_core.wallet import load_wallet, get_hotkey, get_public_key, sign_message, create_file_info
 from miner.window import is_submittable, describe_stage  # re-exported for callers
 from nepher_core.utils.helpers import (
     compute_checksum,
@@ -57,7 +57,10 @@ def validate_agent_structure(agent_path: Path) -> Tuple[bool, List[str]]:
     
     if not agent_path.is_dir():
         return False, [f"Agent path is not a directory: {agent_path}"]
-    
+
+    if (agent_path / "agent.yaml").is_file():
+        return validate_brain_agent_structure(agent_path)
+
     # Check required structure
     for rel_path, item_type in REQUIRED_STRUCTURE.items():
         full_path = agent_path / rel_path
@@ -121,7 +124,8 @@ async def submit_agent(
         ValueError: If agent validation fails
         APIError: If API request fails
     """
-    # Load wallet
+    from nepher_core.wallet import create_file_info, get_hotkey, get_public_key, load_wallet, sign_message
+
     wallet = load_wallet(name=wallet_name, hotkey=wallet_hotkey)
     miner_hotkey = get_hotkey(wallet)
     public_key = get_public_key(wallet)

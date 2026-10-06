@@ -291,6 +291,15 @@ class EvaluationOrchestrator:
         parameter names like ``timeout``.
         """
         msg = message.lower()
+        for code in (
+            "brain_check_failed",
+            "brain_smoke_failed",
+            "brain_timeout",
+            "image_pull_failed",
+            "task_package_install_failed",
+        ):
+            if code in msg:
+                return code
         network_kw = (
             "connectionerror", "connectionrefused", "connectionreset",
             "requests.post", "requests.get", "urllib3",

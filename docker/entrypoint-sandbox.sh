@@ -19,6 +19,8 @@
 # Environment variables:
 #   TASK_MODULE  — name of the task module to install (e.g., spotwaypointnav)
 #   EVAL_TIMEOUT — evaluation timeout in seconds (default: 3600)
+#   RUNTIME      — "brain" selects the benchmark worker and a pinned task package
+#   TASK_PACKAGE — git+https URL pinned to a commit, used only when RUNTIME=brain
 
 set -e
 
@@ -64,6 +66,27 @@ if git -C /app/eval-nav pull --quiet; then
         || echo "[SANDBOX] WARN: eval-nav reinstall after pull failed — continuing with image-baked version"
 else
     echo "[SANDBOX] WARN: eval-nav git pull failed — continuing with image-baked version"
+fi
+
+# Brain mode installs the tournament's pinned task package in the same
+# pre-firewall window. The miner archive is not installed.
+if [ "${RUNTIME}" = "brain" ]; then
+    echo "[SANDBOX] Runtime: brain"
+    if [ -z "${TASK_PACKAGE}" ]; then
+        write_error "task_package_install_failed" "TASK_PACKAGE not specified"
+    fi
+    echo "[SANDBOX] Installing pinned task package..."
+    if ! ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-deps --no-cache-dir "${TASK_PACKAGE}"; then
+        write_error "task_package_install_failed" "Failed to install pinned task package"
+    fi
+    if ! ${ISAACLAB_PATH}/isaaclab.sh -p -c "import nepher_brain" >/dev/null 2>&1; then
+        if [ -z "${NEPHER_BRAIN_PACKAGE}" ]; then
+            write_error "task_package_install_failed" "nepher_brain is not installed and NEPHER_BRAIN_PACKAGE is unset"
+        fi
+        if ! ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-cache-dir "${NEPHER_BRAIN_PACKAGE}"; then
+            write_error "task_package_install_failed" "Failed to install nepher-brain"
+        fi
+    fi
 fi
 
 # ── Network firewall (transparent proxy + iptables) ────────────
@@ -157,30 +180,33 @@ fi
 find /app -name "evaluation_result.json" -delete 2>/dev/null || true
 rm -f /sandbox/output/evaluation_result.json
 
-# ── Copy agent to writable location ───────────────────────────
-echo "[SANDBOX] Copying agent to /app/agent..."
-cp -r /sandbox/agent /app/agent
+if [ "${RUNTIME}" = "brain" ]; then
+    echo "[SANDBOX] Brain mode: pinned task package, no miner agent install"
+else
+    # ── Copy agent to writable location ───────────────────────────
+    echo "[SANDBOX] Copying agent to /app/agent..."
+    cp -r /sandbox/agent /app/agent
 
-# ── Install task module ────────────────────────────────────────
-TASK_MODULE=${TASK_MODULE:-""}
-if [ -z "$TASK_MODULE" ]; then
-    write_error "no_task_module" "TASK_MODULE not specified"
+    # ── Install task module ────────────────────────────────────────
+    TASK_MODULE=${TASK_MODULE:-""}
+    if [ -z "$TASK_MODULE" ]; then
+        write_error "no_task_module" "TASK_MODULE not specified"
+    fi
+
+    SOURCE_PATH="/app/agent/source/${TASK_MODULE}"
+    if [ ! -d "$SOURCE_PATH" ]; then
+        SOURCE_PATH=$(find /app/agent/source -mindepth 1 -maxdepth 1 -type d | head -1)
+    fi
+    if [ -z "$SOURCE_PATH" ] || [ ! -d "$SOURCE_PATH" ]; then
+        write_error "module_not_found" "Task module source not found: ${TASK_MODULE}"
+    fi
+
+    echo "[SANDBOX] Installing task module from: ${SOURCE_PATH}"
+    ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-build-isolation --no-deps -e "$SOURCE_PATH" 2>&1 || {
+        write_error "install_failed" "Task module installation failed"
+    }
+
 fi
-
-SOURCE_PATH="/app/agent/source/${TASK_MODULE}"
-if [ ! -d "$SOURCE_PATH" ]; then
-    SOURCE_PATH=$(find /app/agent/source -mindepth 1 -maxdepth 1 -type d | head -1)
-fi
-if [ -z "$SOURCE_PATH" ] || [ ! -d "$SOURCE_PATH" ]; then
-    write_error "module_not_found" "Task module source not found: ${TASK_MODULE}"
-fi
-
-echo "[SANDBOX] Installing task module from: ${SOURCE_PATH}"
-${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --no-build-isolation --no-deps -e "$SOURCE_PATH" 2>&1 || {
-    write_error "install_failed" "Task module installation failed"
-}
-
-# ── Run evaluation ─────────────────────────────────────────────
 EVAL_SCRIPT="/app/eval-nav/scripts/evaluate.py"
 EVAL_CONFIG="/sandbox/config/eval_config.yaml"
 EVAL_TIMEOUT=${EVAL_TIMEOUT:-3600}

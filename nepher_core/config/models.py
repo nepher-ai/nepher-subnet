@@ -161,6 +161,32 @@ class EnvScene(BaseModel):
         return str(v)
 
 
+class BrainRuntimeConfig(BaseModel):
+    """Generic brain-image settings. No task or model names."""
+
+    brain_image: str
+    task_package: str
+    benchmark_env_id: str
+    max_submission_gb: float = Field(default=40, gt=0)
+    max_gpu_mem_gb: float = Field(default=24, gt=0)
+    step_timeout_s: float = Field(default=60, gt=0)
+    eval_timeout_s: int = Field(default=7200, ge=1)
+
+    @field_validator("brain_image")
+    @classmethod
+    def require_digest(cls, value: str) -> str:
+        if not re.fullmatch(r"\S+@sha256:[0-9a-f]{64}", value):
+            raise ValueError("brain_image must be repo@sha256:<64 hex>")
+        return value
+
+    @field_validator("task_package")
+    @classmethod
+    def require_commit_pin(cls, value: str) -> str:
+        if not re.fullmatch(r"git\+https://\S+@[0-9a-f]{40}", value):
+            raise ValueError("task_package must be a git+https URL pinned to a 40-hex commit")
+        return value
+
+
 class TaskConfig(BaseModel):
     """Task/evaluation configuration (downloaded from API)."""
     
@@ -180,6 +206,16 @@ class TaskConfig(BaseModel):
     log_dir: Optional[str] = None
     enable_logging: bool = Field(default=False)
     render: bool = Field(default=False)
+    runtime: str = "in_process"
+    brain: Optional[BrainRuntimeConfig] = None
+
+    @model_validator(mode="after")
+    def require_brain_when_selected(self):
+        if self.runtime not in ("in_process", "brain"):
+            raise ValueError("runtime must be in_process or brain")
+        if self.runtime == "brain" and self.brain is None:
+            raise ValueError("brain config is required when runtime is brain")
+        return self
 
 
 class ValidatorConfig(BaseModel):

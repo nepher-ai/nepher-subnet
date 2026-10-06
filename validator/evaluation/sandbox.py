@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -215,6 +216,171 @@ class SandboxRunner:
         finally:
             await self._cleanup_container(container_name)
 
+    async def ensure_brain_image(self, ref: str) -> None:
+        """Pull a brain image by digest and reject a mismatched id."""
+        digest = ref.split("@", 1)[-1]
+        returncode, stdout, stderr = await self._run_cmd(["docker", "image", "inspect", ref])
+        if returncode != 0:
+            returncode, stdout, stderr = await self._run_cmd(["docker", "pull", ref], timeout=3600)
+            if returncode != 0:
+                detail = stderr or stdout
+                raise SandboxError(f"image_pull_failed: {detail}", recoverable=False, log_output=detail)
+        returncode, stdout, stderr = await self._run_cmd(
+            ["docker", "image", "inspect", "--format", "{{.Id}} {{json .RepoDigests}}", ref]
+        )
+        if returncode != 0 or digest not in (stdout or ""):
+            detail = stdout or stderr
+            raise SandboxError(
+                f"image_pull_failed: digest mismatch for {ref}",
+                recoverable=False,
+                log_output=detail,
+            )
+
+    async def run_brain_evaluation(
+        self,
+        submission: Path,
+        eval_config_path: Path,
+        brain_image: str,
+        task_package: str,
+        task_module: str,
+        timeout: int = 7200,
+        replicas: int = 1,
+        max_submission_gb: Optional[float] = None,
+        task_config_path: Optional[Path] = None,
+        whitelist_domains: Optional[list[str]] = None,
+    ) -> dict[str, Any]:
+        """Run a brain container and the existing sandbox image against it.
+
+        The miner archive is mounted only into the brain container. The sandbox
+        installs ``task_package`` and talks to the brain over ``/run/brain``.
+        """
+        sandbox_id = uuid.uuid4().hex[:12]
+        brain_name = f"nepher-brain-{sandbox_id}"
+        world_name = f"nepher-sandbox-{sandbox_id}"
+        sandbox_dir = self._sandbox_base / sandbox_id
+        output_dir = sandbox_dir / "output"
+        config_dir = sandbox_dir / "config"
+        socket_dir = sandbox_dir / "run"
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            config_dir.mkdir(parents=True, exist_ok=True)
+            socket_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(eval_config_path, config_dir / "eval_config.yaml")
+            task_config = task_config_path or (self.workspace / "task_config.yaml")
+            if task_config.exists():
+                shutil.copy2(task_config, config_dir / "task_config.yaml")
+
+            check_cmd = self._build_brain_check_cmd(submission, brain_image, max_submission_gb)
+            returncode, stdout, stderr = await self._run_cmd(check_cmd, timeout=600)
+            if returncode != 0:
+                detail = stderr or stdout
+                raise SandboxError(f"brain_check_failed: {detail}", recoverable=False, log_output=detail)
+
+            serve_cmd = self._build_brain_serve_cmd(
+                brain_name, submission, socket_dir, brain_image, replicas, max_submission_gb
+            )
+            returncode, stdout, stderr = await self._run_cmd(serve_cmd, timeout=120)
+            if returncode != 0:
+                detail = stderr or stdout
+                raise SandboxError(f"brain_check_failed: failed to start brain: {detail}", recoverable=False, log_output=detail)
+
+            await self._wait_for_brain_sockets(socket_dir, replicas, timeout=120)
+            smoke_cmd = [
+                "docker", "exec", brain_name,
+                "nepher-brain", "smoke", "--socket", "/run/brain/brain-0.sock",
+            ]
+            returncode, stdout, stderr = await self._run_cmd(smoke_cmd, timeout=180)
+            if returncode != 0:
+                detail = stderr or stdout
+                raise SandboxError(f"brain_smoke_failed: {detail}", recoverable=False, log_output=detail)
+
+            world_cmd = self._build_docker_cmd(
+                container_name=world_name,
+                agent_registry=submission,
+                config_dir=config_dir,
+                output_dir=output_dir,
+                task_module=task_module,
+                timeout=timeout,
+                whitelist_domains=whitelist_domains,
+                mount_agent=False,
+                extra_env={"RUNTIME": "brain", "TASK_PACKAGE": task_package},
+                extra_mounts=[(self._to_host_path(socket_dir), "/run/brain")],
+            )
+            returncode, stdout, stderr = await self._run_cmd(world_cmd, timeout=timeout + 120)
+            sandbox_log = stdout or ""
+            if stderr:
+                sandbox_log += "\n--- stderr ---\n" + stderr
+            try:
+                result = self._collect_result(output_dir)
+            except SandboxError as exc:
+                exc.log_output = sandbox_log
+                raise
+            if returncode != 0 and result.get("metadata", {}).get("error"):
+                raise SandboxError(
+                    f"Sandbox evaluation failed: {result.get('summary', 'unknown error')}",
+                    log_output=sandbox_log,
+                )
+            return result
+        finally:
+            await self._cleanup_container(brain_name)
+            await self._cleanup_container(world_name)
+
+    def _build_brain_check_cmd(
+        self,
+        submission: Path,
+        image: str,
+        max_submission_gb: Optional[float],
+    ) -> list[str]:
+        host_submission = self._to_host_path(submission)
+        cmd = [
+            "docker", "run", "--rm", "--network", "none",
+            "-v", f"{host_submission}:/submission:ro",
+        ]
+        if max_submission_gb is not None:
+            cmd.extend(["-e", f"NEPHER_MAX_SUBMISSION_GB={max_submission_gb}"])
+        cmd.extend([image, "nepher-brain", "check"])
+        return cmd
+
+    def _build_brain_serve_cmd(
+        self,
+        container_name: str,
+        submission: Path,
+        socket_dir: Path,
+        image: str,
+        replicas: int,
+        max_submission_gb: Optional[float],
+    ) -> list[str]:
+        host_submission = self._to_host_path(submission)
+        host_sockets = self._to_host_path(socket_dir)
+        cmd = [
+            "docker", "run", "-d",
+            "--name", container_name,
+            "--network", "none",
+            "--gpus", "all",
+            "--read-only",
+            "--cap-drop", "ALL",
+            "--memory", self.memory_limit,
+            "--pids-limit", str(DEFAULT_PIDS_LIMIT),
+            "--tmpfs", "/tmp:rw,nosuid,size=1g",
+            "-v", f"{host_submission}:/submission:ro",
+            "-v", f"{host_sockets}:/run/brain",
+            "-e", "NVIDIA_VISIBLE_DEVICES=all",
+            "-e", "NVIDIA_DRIVER_CAPABILITIES=all",
+        ]
+        if max_submission_gb is not None:
+            cmd.extend(["-e", f"NEPHER_MAX_SUBMISSION_GB={max_submission_gb}"])
+        cmd.extend([image, "nepher-brain", "serve", "--replicas", str(replicas)])
+        return cmd
+
+    async def _wait_for_brain_sockets(self, socket_dir: Path, replicas: int, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            ready = all((socket_dir / f"brain-{index}.sock").exists() for index in range(replicas))
+            if ready:
+                return
+            await asyncio.sleep(0.25)
+        raise SandboxError("brain_timeout: brain sockets did not appear", recoverable=False)
+
     def _to_host_path(self, container_path: Path) -> str:
         """Translate a container-internal path to the corresponding host path.
 
@@ -259,6 +425,9 @@ class SandboxRunner:
         task_module: str,
         timeout: int,
         whitelist_domains: Optional[list[str]] = None,
+        mount_agent: bool = True,
+        extra_env: Optional[dict[str, str]] = None,
+        extra_mounts: Optional[list[tuple[str, str]]] = None,
     ) -> list[str]:
         """Build the `docker run` command with security restrictions."""
 
@@ -307,9 +476,17 @@ class SandboxRunner:
             # Network whitelist — comma-separated domains for the sandbox proxy.
             # Fetched from the tournament API; entrypoint falls back to defaults if empty.
             "-e", f"SANDBOX_WHITELIST={','.join(whitelist_domains or [])}",
+        ]
+        if extra_env:
+            for key, value in extra_env.items():
+                cmd.extend(["-e", f"{key}={value}"])
+        cmd.extend([
             # ── Volume mounts (using HOST paths for DinD) ──
             # Agent files (READ-ONLY — cannot modify or escape)
-            "-v", f"{host_agent}:/sandbox/agent:ro",
+        ])
+        if mount_agent:
+            cmd.extend(["-v", f"{host_agent}:/sandbox/agent:ro"])
+        cmd.extend([
             # Eval config (READ-ONLY)
             "-v", f"{host_config}:/sandbox/config:ro",
             # Output directory (WRITE — only place sandbox can write results)
@@ -317,7 +494,7 @@ class SandboxRunner:
             # Tmpfs for writable temp directories
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=4g",
             "--tmpfs", "/var/tmp:rw,noexec,nosuid,size=1g",
-        ]
+        ])
 
         # Mount environment cache if it exists (READ-ONLY)
         if self.env_cache_path.exists():
@@ -325,6 +502,9 @@ class SandboxRunner:
             cmd.extend([
                 "-v", f"{host_cache}:/sandbox/envs:ro",
             ])
+        if extra_mounts:
+            for host_path, container_path in extra_mounts:
+                cmd.extend(["-v", f"{host_path}:{container_path}"])
 
         # The sandbox image
         cmd.append(self.sandbox_image)

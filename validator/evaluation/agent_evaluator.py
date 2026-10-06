@@ -111,7 +111,16 @@ class AgentEvaluator:
             EvaluationError: If any step fails.
         """
         self._set_tournament_context(tournament_id)
-        task_module = self._get_task_module()
+        task_config = self._read_task_config()
+        if task_config.get("runtime") == "brain":
+            await self._evaluate_brain(tournament_id, agent, task_config)
+            return
+        task_module = task_config.get("task_module")
+        if not task_module:
+            raise EvaluationError(
+                "task_module missing from task configuration",
+                recoverable=False,
+            )
 
         try:
             logger.info(f"Evaluating agent: {agent.id} (tournament {tournament_id})")
@@ -151,12 +160,8 @@ class AgentEvaluator:
 
     # -- Shared helpers -------------------------------------------------------
 
-    def _get_task_module(self) -> str:
-        """Get task module name from the current tournament's task config.
-
-        Reads the per-tournament task_config.yaml (written by setup) so that
-        concurrently-active tournaments each use their own task module.
-        """
+    def _read_task_config(self) -> dict:
+        """Load the current tournament's task_config.yaml."""
         task_config_path = self.tn_workspace / "task_config.yaml"
         if not task_config_path.exists():
             raise EvaluationError(
@@ -164,14 +169,86 @@ class AgentEvaluator:
                 recoverable=False,
             )
         with open(task_config_path, "r") as f:
-            task_config = yaml.safe_load(f) or {}
-        task_module = task_config.get("task_module")
+            return yaml.safe_load(f) or {}
+
+    def _get_task_module(self) -> str:
+        """Get task module name from the current tournament's task config.
+
+        Reads the per-tournament task_config.yaml (written by setup) so that
+        concurrently-active tournaments each use their own task module.
+        """
+        task_module = self._read_task_config().get("task_module")
         if not task_module:
             raise EvaluationError(
                 "task_module missing from task configuration",
                 recoverable=False,
             )
         return task_module
+
+    async def _evaluate_brain(self, tournament_id: str, agent: Agent, task_config: dict) -> None:
+        """Layout-check a brain submission and evaluate it in the existing sandbox."""
+        from miner.brain_layout import validate_brain_agent_structure
+
+        brain = task_config.get("brain") or {}
+        if not brain.get("brain_image") or not brain.get("task_package"):
+            raise EvaluationError(
+                "brain_check_failed: brain.brain_image and brain.task_package are required",
+                recoverable=False,
+            )
+        try:
+            logger.info(f"Evaluating brain agent: {agent.id} (tournament {tournament_id})")
+            await self._clean_previous_state()
+            await self._prepare_agent(agent)
+            valid, errors = validate_brain_agent_structure(
+                self.registry_path,
+                max_gb=brain.get("max_submission_gb"),
+            )
+            if not valid:
+                raise EvaluationError(
+                    "brain_check_failed: " + "; ".join(errors),
+                    recoverable=False,
+                )
+            await self.api.set_evaluation_in_progress(
+                tournament_id=tournament_id,
+                agent_id=agent.id,
+                validator_hotkey=self.validator_hotkey,
+            )
+            await self.sandbox.verify_docker()
+            await self.sandbox.ensure_brain_image(brain["brain_image"])
+            eval_config_path = self._build_eval_config()
+            timeout = int(brain.get("eval_timeout_s") or self.config.retry.evaluation_timeout_seconds)
+            replicas = int(os.environ.get("NEPHER_BRAIN_REPLICAS", "1"))
+            result = await self.sandbox.run_brain_evaluation(
+                submission=self.registry_path,
+                eval_config_path=eval_config_path,
+                brain_image=brain["brain_image"],
+                task_package=brain["task_package"],
+                task_module=task_config.get("task_module") or "brain",
+                timeout=timeout,
+                replicas=replicas,
+                max_submission_gb=brain.get("max_submission_gb"),
+                task_config_path=self.tn_workspace / "task_config.yaml",
+                whitelist_domains=await self.api.get_whitelist_domains(),
+            )
+            with open(self.result_path, "w") as f:
+                json.dump(result, f)
+        except EvaluationError:
+            raise
+        except SandboxError as e:
+            logger.error(f"Brain evaluation failed: {e}")
+            raise EvaluationError(str(e), recoverable=e.recoverable, log_output=e.log_output)
+        except Exception as e:
+            logger.error(f"Brain evaluation failed: {e}")
+            raise EvaluationError(str(e), recoverable=True)
+        finally:
+            await self._cleanup(tournament_id)
+        try:
+            await self._submit_results(tournament_id, agent.id, result)
+            logger.info(f"Evaluation complete for agent: {agent.id}")
+        except APIError as e:
+            logger.warning(f"Result submission failed for agent {agent.id}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected submission error for agent {agent.id}: {e}")
 
     # -- Pipeline steps -------------------------------------------------------
 
