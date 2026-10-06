@@ -250,7 +250,12 @@ class ConfigManager:
         if self._task_config is None:
             raise RuntimeError("Task configuration not loaded")
         
-        return [scene.env_id for scene in self._task_config.env_scenes]
+        ids = [scene.env_id for scene in self._task_config.env_scenes]
+        if self._task_config.benchmark_env_id:
+            ids.append(self._task_config.benchmark_env_id)
+        if self._task_config.brain is not None:
+            ids.append(self._task_config.brain.benchmark_env_id)
+        return list(dict.fromkeys(ids))
 
     @staticmethod
     def from_env() -> "ConfigManager":

@@ -429,7 +429,14 @@ class SetupManager:
             raise SetupError("Task configuration not downloaded")
         
         env_scenes = self._task_config.get("env_scenes", [])
-        return [scene["env_id"] for scene in env_scenes]
+        ids = [scene["env_id"] for scene in env_scenes]
+        benchmark_env_id = self._task_config.get("benchmark_env_id")
+        if benchmark_env_id:
+            ids.append(benchmark_env_id)
+        brain = self._task_config.get("brain") or {}
+        if isinstance(brain, dict) and brain.get("benchmark_env_id"):
+            ids.append(brain["benchmark_env_id"])
+        return list(dict.fromkeys(ids))
 
     def reset(self) -> None:
         """Reset setup state."""

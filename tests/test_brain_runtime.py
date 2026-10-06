@@ -68,8 +68,11 @@ def test_task_config_defaults_and_rejects_unpinned_brain_fields():
         "task_package": PACKAGE,
         "benchmark_env_id": "tabletop-phase1-v1",
     }
-    parsed = _task(runtime="brain", brain=brain)
+    parsed = _task(runtime="brain", brain=brain, env_scenes=[])
     assert parsed.brain.brain_image == IMAGE
+    assert parsed.env_scenes == []
+    with pytest.raises(ValidationError):
+        _task(env_scenes=[])
     with pytest.raises(ValidationError):
         _task(runtime="brain", brain={**brain, "brain_image": "nepher-brain:latest"})
     with pytest.raises(ValidationError):

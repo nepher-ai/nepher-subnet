@@ -194,7 +194,8 @@ class TaskConfig(BaseModel):
     
     task_name: str
     task_module: str
-    env_scenes: List[EnvScene]
+    env_scenes: List[EnvScene] = Field(default_factory=list)
+    benchmark_env_id: Optional[str] = None
     seeds: List[int] = Field(default=[42])
     num_episodes: int = Field(default=10, ge=1)
     scoring_version: str = Field(default="v1")
@@ -215,6 +216,8 @@ class TaskConfig(BaseModel):
             raise ValueError("runtime must be in_process or brain")
         if self.runtime == "brain" and self.brain is None:
             raise ValueError("brain config is required when runtime is brain")
+        if self.runtime != "brain" and not self.env_scenes:
+            raise ValueError("env_scenes is required when runtime is in_process")
         return self
 
 
