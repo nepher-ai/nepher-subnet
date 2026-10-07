@@ -66,7 +66,7 @@ def test_task_config_defaults_and_rejects_unpinned_brain_fields():
     brain = {
         "brain_image": IMAGE,
         "task_package": PACKAGE,
-        "benchmark_env_id": "tabletop-phase1-v1",
+        "benchmark_env_id": "franka-tabletop-v1",
     }
     parsed = _task(runtime="brain", brain=brain, env_scenes=[])
     assert parsed.brain.brain_image == IMAGE
