@@ -135,6 +135,20 @@ docker compose ps
 
 ---
 
+## Tournaments with weights on Hugging Face
+
+For a tournament whose `submission_mode` is `huggingface`, the miner's weights stay in the miner's private Hugging Face repo and the validator fetches them before each evaluation:
+
+- The **validator host** (the orchestrator container) needs outbound HTTPS to the signed download URLs the Nepher API returns. These point at Hugging Face's CDN (`huggingface.co` and its CDN hosts). The sandbox needs no new access, and no Hugging Face token is ever configured on a validator.
+- Weights are downloaded and hashed on the host. The sandbox only sees the finished submission directory.
+- Disk: the workspace volume must hold the largest sealed submission (`brain.max_submission_gb`) plus a 1 GB margin.
+- An agent whose custody is not `sealed`, whose files differ from the sealed hashes, or that is disqualified while it runs, is **not scored**. The validator logs the reason, reports hash differences to the backend, and retries the agent after 15 minutes if it is still listed.
+- Reward weights for such a tournament are set only after the backend marks every paid podium place `archived`. Until then the remainder burns on UID 0.
+
+Run a validator version that includes this feature before the first `huggingface` tournament opens. Older versions are not sent those agents.
+
+---
+
 ## Appendix: CPU-Only Validator (weights only)
 
 The `validator-cpu` service is a stripped-down validator that **only sets weights and burns** — it does **not** evaluate agents. Use it if you want to run a valid validator without a GPU. (The full GPU `validator` from Section 5 already does everything, including weight setting; the CPU service is not a companion to it.)

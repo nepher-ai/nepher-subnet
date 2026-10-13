@@ -19,6 +19,7 @@ from bittensor_wallet import Wallet
 
 from nepher_core.api import TournamentAPI, Tournament
 from nepher_core.config import ValidatorConfig
+from nepher_core.custody import MODE_INLINE
 from nepher_core.wallet.utils import (
     load_wallet,
     get_subtensor,
@@ -27,7 +28,11 @@ from nepher_core.wallet.utils import (
 )
 from nepher_core.utils.logging import get_logger
 from validator.state import TournamentPeriod, get_current_period
-from validator.reward.distribution import compute_weight_distribution, RewardRecipient
+from validator.reward.distribution import (
+    compute_weight_distribution,
+    custody_payout_blockers,
+    RewardRecipient,
+)
 
 logger = get_logger(__name__)
 
@@ -245,7 +250,9 @@ class WeightSetter:
 
             chosen = None
             for candidate in reward_tournaments:
-                recipients = await self._get_reward_recipients(candidate.id, metagraph)
+                recipients = await self._get_reward_recipients(
+                    candidate.id, metagraph, candidate.submission_mode
+                )
                 if recipients:
                     chosen = candidate
                     reward_recipients = recipients
@@ -274,12 +281,16 @@ class WeightSetter:
         self,
         tournament_id: str,
         metagraph: bt.Metagraph,
+        submission_mode: str = MODE_INLINE,
     ) -> List[RewardRecipient]:
         """Resolve podium places to ``(uid, share)`` pairs.
 
         Places whose hotkey is missing from the metagraph are skipped; their
         share burns with the unallocated remainder. Returns an empty list when
         no approved winner can be resolved (caller burns the remainder).
+
+        For huggingface tournaments (or any podium entry that carries a custody
+        status) the whole payout is withheld unless every paid place is ``archived``.
         """
         logger.info("Querying winners from tournament API...")
 
@@ -301,8 +312,20 @@ class WeightSetter:
                         agent_id=winner_info.winner_agent_id,
                         score=winner_info.winner_score,
                         reward_share=1.0,
+                        custody_status=winner_info.winner_custody_status,
                     )
                 ]
+
+            blocked = custody_payout_blockers(podium, submission_mode)
+            if blocked:
+                places = ", ".join(
+                    f"place {p.place}={p.custody_status or 'unknown'}" for p in blocked
+                )
+                logger.error(
+                    f"[{tournament_id}] payout withheld: every paid place must be archived "
+                    f"({places}) — remainder burns on UID 0"
+                )
+                return []
 
             recipients: List[RewardRecipient] = []
             for place in sorted(podium, key=lambda p: p.place):

@@ -31,6 +31,12 @@ class Tournament(BaseModel):
     public_eval_end_time: Optional[int] = None
     public_eval_buffer_hours: Optional[int] = None
 
+    # Tournament format (rl, vla, wam, lwm, task_generation) and where weights live.
+    # "inline" tournaments upload everything; "huggingface" ones seal weights on HF.
+    format: Optional[str] = None
+    submission_mode: str = "inline"
+    base_weight_sha256: List[str] = Field(default_factory=list)
+
     # Optional fields
     description: Optional[str] = None
     task_name: Optional[str] = None
@@ -59,7 +65,51 @@ class Agent(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     message: Optional[str] = None  # Upload response may include a message
-    
+
+    # Set only for huggingface tournaments (sealed, archiving, archived, disqualified, ...).
+    custody_status: Optional[str] = None
+    hf_revision: Optional[str] = None
+    weights_fingerprint: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
+
+
+class AgentCustody(BaseModel):
+    """Current custody state of one agent (GET /agents/{id}/custody)."""
+
+    agent_id: str
+    custody_status: str
+    weights_fingerprint: Optional[str] = None
+    hf_revision: Optional[str] = None
+    checked_at: Optional[datetime] = None
+    reason: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
+
+
+class WeightLeaseFile(BaseModel):
+    """One sealed weight file and its short-lived download URL."""
+
+    path: str
+    sha256: str
+    size: int
+    url: str
+    url_expires_at: Optional[datetime] = None
+
+    class Config:
+        extra = "ignore"
+
+
+class WeightLease(BaseModel):
+    """Presigned download URLs for the sealed weights of one agent."""
+
+    agent_id: str
+    revision: str
+    expires_at: Optional[datetime] = None
+    files: List[WeightLeaseFile] = Field(default_factory=list)
+
     class Config:
         extra = "ignore"
 
@@ -108,6 +158,8 @@ class PodiumWinnerInfo(BaseModel):
     agent_id: Optional[str] = None
     score: Optional[float] = None
     reward_share: float = 0.0
+    # Present for huggingface tournaments; payout requires "archived".
+    custody_status: Optional[str] = None
 
     class Config:
         extra = "ignore"
@@ -124,6 +176,7 @@ class WinnerInfo(BaseModel):
     winner_hotkey: Optional[str] = None
     winner_agent_id: Optional[str] = None
     winner_score: Optional[float] = None
+    winner_custody_status: Optional[str] = None
     reward_split_ratios: Optional[List[int]] = None
     winners: List[PodiumWinnerInfo] = Field(default_factory=list)
 

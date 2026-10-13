@@ -28,7 +28,10 @@ from nepher_core.api.models import (
     UploadToken,
     EvaluationToken,
     WeightCommitInfo,
+    AgentCustody,
+    WeightLease,
 )
+from nepher_core.custody import lease_message
 from nepher_core.api.exceptions import (
     APIError,
     AuthenticationError,
@@ -87,6 +90,8 @@ class TournamentAPI:
             "X-API-Key": self.api_key,
             "Content-Type": "application/json",
             "Accept": "application/json",
+            # Lets the backend list huggingface-mode agents only to upgraded validators.
+            "X-Validator-Custody": "1",
         }
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -611,6 +616,74 @@ class TournamentAPI:
         
         logger.info(f"Downloaded agent to {output_path}")
         return output_path
+
+    # =========================================================================
+    # Custody Endpoints (huggingface tournaments)
+    # =========================================================================
+
+    async def get_agent_custody(self, agent_id: str) -> AgentCustody:
+        """
+        Read the current custody state of an agent.
+
+        Endpoint: GET /api/v1/agents/{agent_id}/custody
+        """
+        response = await self._request("GET", f"/api/v1/agents/{agent_id}/custody")
+        return AgentCustody(**response.json())
+
+    def _signed_lease_body(
+        self,
+        tournament_id: str,
+        agent_id: str,
+        validator_hotkey: str,
+    ) -> dict[str, Any]:
+        self._require_wallet()
+        lease_info = lease_message(validator_hotkey, agent_id)
+        public_key, signature = self._sign_eval_info(lease_info)
+        return {
+            "tournament_id": tournament_id,
+            "validator_hotkey": validator_hotkey,
+            "public_key": public_key,
+            "lease_info": lease_info,
+            "signature": signature,
+        }
+
+    async def request_weight_lease(
+        self,
+        tournament_id: str,
+        agent_id: str,
+        validator_hotkey: str,
+    ) -> WeightLease:
+        """
+        Request presigned download URLs for the sealed weights of an agent.
+
+        The backend re-checks the miner's repo first and answers 409 when the agent
+        is no longer sealed. The response never carries a Hugging Face credential.
+
+        Endpoint: POST /api/v1/agents/{agent_id}/weight-lease
+        """
+        body = self._signed_lease_body(tournament_id, agent_id, validator_hotkey)
+        response = await self._request(
+            "POST", f"/api/v1/agents/{agent_id}/weight-lease", json=body
+        )
+        return WeightLease(**response.json())
+
+    async def release_weight_lease(
+        self,
+        tournament_id: str,
+        agent_id: str,
+        validator_hotkey: str,
+    ) -> None:
+        """Tell the backend the download finished. Never raises.
+
+        Endpoint: POST /api/v1/agents/{agent_id}/weight-lease/release
+        """
+        try:
+            body = self._signed_lease_body(tournament_id, agent_id, validator_hotkey)
+            await self._request(
+                "POST", f"/api/v1/agents/{agent_id}/weight-lease/release", json=body
+            )
+        except Exception as e:
+            logger.warning(f"Failed to release weight lease for agent {agent_id}: {e}")
 
     # =========================================================================
     # Evaluation Endpoints (CLI two-step verify → submit with wallet signature)

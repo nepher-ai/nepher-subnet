@@ -1,4 +1,4 @@
-"""
+﻿"""
 Single agent evaluation logic.
 
 Handles the complete evaluation flow for a single agent:
@@ -16,6 +16,8 @@ import os
 import shutil
 import sys
 import tempfile
+import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional, Any
 
@@ -23,6 +25,15 @@ import yaml
 
 from nepher_core.api import TournamentAPI, Agent, APIError
 from nepher_core.config import ValidatorConfig
+from nepher_core.custody import (
+    MODE_HUGGINGFACE,
+    MODE_INLINE,
+    STATUS_SEALED,
+    SUBMISSION_MODES,
+    CustodyError,
+    declared_matches_manifest,
+    weights_fingerprint,
+)
 from nepher_core.utils.helpers import (
     unzip_file,
     clean_directory,
@@ -45,6 +56,19 @@ class EvaluationError(Exception):
         super().__init__(message)
 
 
+class EvaluationDeferred(Exception):
+    """The agent must not be scored now. Nothing is submitted; the agent stays pending.
+
+    ``report_type`` asks the orchestrator to report the agent to the backend (for example
+    ``weights_mismatch``) so that an admin can look at it.
+    """
+
+    def __init__(self, message: str, report_type: Optional[str] = None):
+        self.message = message
+        self.report_type = report_type
+        super().__init__(message)
+
+
 class AgentEvaluator:
     """
     Handles evaluation of a single agent via sandboxed Docker containers.
@@ -58,7 +82,7 @@ class AgentEvaluator:
     6. Cleanup
     """
 
-    MODEL_VALIDATION_TIMEOUT = 120  # seconds — fast-fail on corrupt/unloadable checkpoints
+    MODEL_VALIDATION_TIMEOUT = 120  # seconds â€” fast-fail on corrupt/unloadable checkpoints
     MAX_POLICY_SIZE_MB = 2048  # reject files larger than 2 GB
 
     def __init__(
@@ -70,6 +94,8 @@ class AgentEvaluator:
         self.config = config
         self.api = api
         self.validator_hotkey = validator_hotkey
+        # agent_id -> monotonic time before which a huggingface agent is not retried.
+        self._deferred_until: dict[str, float] = {}
 
         # Base workspace (shared). Per-tournament artifacts live under
         # workspace/tournaments/<id>/ but remain *under* the base workspace so
@@ -103,17 +129,47 @@ class AgentEvaluator:
         self,
         tournament_id: str,
         agent: Agent,
+        submission_mode: str = MODE_INLINE,
+        base_weight_sha256: Sequence[str] = (),
     ) -> None:
         """
         Run the complete evaluation pipeline for an agent.
 
+        Args:
+            tournament_id: Tournament the agent belongs to.
+            agent: Agent to evaluate.
+            submission_mode: ``inline`` (weights inside the archive) or ``huggingface``
+                (weights sealed in the miner's repo and downloaded here).
+            base_weight_sha256: The tournament's public base-weight allowlist.
+
         Raises:
             EvaluationError: If any step fails.
+            EvaluationDeferred: If the agent must not be scored now (custody not intact,
+                weights unavailable). Nothing is submitted and the agent is retried later.
         """
         self._set_tournament_context(tournament_id)
         task_config = self._read_task_config()
+        if submission_mode not in SUBMISSION_MODES:
+            raise EvaluationError(
+                f"unknown submission_mode: {submission_mode!r}", recoverable=False
+            )
+        external = submission_mode == MODE_HUGGINGFACE
+        if external:
+            if task_config.get("runtime") != "brain":
+                raise EvaluationError(
+                    "brain_check_failed: huggingface tournaments require runtime: brain",
+                    recoverable=False,
+                )
+            self._require_custody(agent)
+        elif agent.custody_status is not None:
+            raise EvaluationError(
+                "brain_check_failed: agent carries a custody status in an inline tournament",
+                recoverable=False,
+            )
         if task_config.get("runtime") == "brain":
-            await self._evaluate_brain(tournament_id, agent, task_config)
+            await self._evaluate_brain(
+                tournament_id, agent, task_config, external, tuple(base_weight_sha256)
+            )
             return
         task_module = task_config.get("task_module")
         if not task_module:
@@ -185,8 +241,19 @@ class AgentEvaluator:
             )
         return task_module
 
-    async def _evaluate_brain(self, tournament_id: str, agent: Agent, task_config: dict) -> None:
-        """Layout-check a brain submission and evaluate it in the existing sandbox."""
+    async def _evaluate_brain(
+        self,
+        tournament_id: str,
+        agent: Agent,
+        task_config: dict,
+        external_weights: bool = False,
+        base_weight_sha256: Sequence[str] = (),
+    ) -> None:
+        """Layout-check a brain submission and evaluate it in the existing sandbox.
+
+        With ``external_weights`` the sealed weights are downloaded on this host first and
+        the result is dropped when custody is no longer intact at submission time.
+        """
         from miner.brain_layout import validate_brain_agent_structure
 
         brain = task_config.get("brain") or {}
@@ -199,6 +266,10 @@ class AgentEvaluator:
             logger.info(f"Evaluating brain agent: {agent.id} (tournament {tournament_id})")
             await self._clean_previous_state()
             await self._prepare_agent(agent)
+            if external_weights:
+                await self._fetch_sealed_weights(
+                    tournament_id, agent, brain.get("max_submission_gb"), base_weight_sha256
+                )
             valid, errors = validate_brain_agent_structure(
                 self.registry_path,
                 max_gb=brain.get("max_submission_gb"),
@@ -232,7 +303,7 @@ class AgentEvaluator:
             )
             with open(self.result_path, "w") as f:
                 json.dump(result, f)
-        except EvaluationError:
+        except (EvaluationError, EvaluationDeferred):
             raise
         except SandboxError as e:
             logger.error(f"Brain evaluation failed: {e}")
@@ -242,6 +313,9 @@ class AgentEvaluator:
             raise EvaluationError(str(e), recoverable=True)
         finally:
             await self._cleanup(tournament_id)
+        if external_weights:
+            # Weights may have changed while the evaluation ran; score only a sealed agent.
+            await self._ensure_still_sealed(agent)
         try:
             await self._submit_results(tournament_id, agent.id, result)
             logger.info(f"Evaluation complete for agent: {agent.id}")
@@ -249,6 +323,135 @@ class AgentEvaluator:
             logger.warning(f"Result submission failed for agent {agent.id}: {e}")
         except Exception as e:
             logger.error(f"Unexpected submission error for agent {agent.id}: {e}")
+
+    # -- Hugging Face custody -------------------------------------------------
+
+    DEFER_SECONDS = 900  # wait before retrying an agent whose custody check failed
+
+    def _defer(self, agent: Agent, message: str, report_type: Optional[str] = None) -> None:
+        """Skip *agent* for a while and raise ``EvaluationDeferred``."""
+        self._deferred_until[agent.id] = time.monotonic() + self.DEFER_SECONDS
+        raise EvaluationDeferred(message, report_type)
+
+    def _require_custody(self, agent: Agent) -> None:
+        """Gate a huggingface agent before any download."""
+        if agent.custody_status != STATUS_SEALED:
+            raise EvaluationDeferred(
+                f"agent {agent.id} is not sealed (custody_status={agent.custody_status!r})"
+            )
+        if self._deferred_until.get(agent.id, 0.0) > time.monotonic():
+            raise EvaluationDeferred(f"agent {agent.id} is cooling down after a custody problem")
+
+    async def _read_sealed_custody(self, agent: Agent):
+        """Return the agent's custody record, deferring unless it is sealed and unchanged."""
+        try:
+            custody = await self.api.get_agent_custody(agent.id)
+        except APIError as e:
+            self._defer(agent, f"custody of agent {agent.id} could not be read: {e}")
+        if custody.custody_status != STATUS_SEALED:
+            self._defer(
+                agent,
+                f"agent {agent.id} is no longer sealed (custody_status={custody.custody_status})",
+            )
+        expected = agent.weights_fingerprint
+        if expected and custody.weights_fingerprint != expected:
+            self._defer(
+                agent, f"sealed fingerprint of agent {agent.id} changed", "weights_mismatch"
+            )
+        return custody
+
+    async def _ensure_still_sealed(self, agent: Agent) -> None:
+        """Drop the result unless the backend still reports the agent as sealed."""
+        await self._read_sealed_custody(agent)
+
+    async def _fetch_sealed_weights(
+        self,
+        tournament_id: str,
+        agent: Agent,
+        max_submission_gb: Optional[float],
+        base_weight_sha256: Sequence[str],
+    ) -> None:
+        """Download the sealed weights of *agent* into the extracted submission.
+
+        The archive itself must contain no weights. The lease manifest has to equal both
+        the ``agent.yaml`` listing and the miner-signed fingerprint before any byte is
+        downloaded, and the downloaded bytes are hashed against the same manifest.
+        """
+        from miner.brain_layout import validate_brain_agent_structure
+        from validator.evaluation.weight_fetch import (
+            WeightFetchError,
+            WeightMismatchError,
+            check_lease_shape,
+            download_weights,
+            manifest_of,
+            total_size,
+        )
+
+        weights_dir = self.registry_path / "weights"
+        if weights_dir.exists() and any(weights_dir.rglob("*")):
+            raise EvaluationError(
+                "brain_check_failed: huggingface submissions must not contain weights/ files",
+                recoverable=False,
+            )
+        valid, errors = validate_brain_agent_structure(self.registry_path, external_weights=True)
+        if not valid:
+            raise EvaluationError("brain_check_failed: " + "; ".join(errors), recoverable=False)
+
+        custody = await self._read_sealed_custody(agent)
+        try:
+            lease = await self.api.request_weight_lease(
+                tournament_id=tournament_id,
+                agent_id=agent.id,
+                validator_hotkey=self.validator_hotkey,
+            )
+        except APIError as e:
+            self._defer(agent, f"weight lease for agent {agent.id} was refused: {e}")
+        try:
+            try:
+                check_lease_shape(lease)
+                manifest = manifest_of(lease)
+                with open(self.registry_path / "agent.yaml", "r", encoding="utf-8") as f:
+                    declared = (yaml.safe_load(f) or {}).get("weights") or {}
+                problems = declared_matches_manifest(declared, manifest)
+                fingerprint = weights_fingerprint(manifest, base_weight_sha256)
+                if fingerprint != custody.weights_fingerprint:
+                    problems.append("lease manifest does not match the sealed fingerprint")
+            except (CustodyError, WeightFetchError) as e:
+                problems = [str(e)]
+            if problems:
+                self._defer(
+                    agent, "sealed weights disagree: " + "; ".join(problems), "weights_mismatch"
+                )
+            limit = None if max_submission_gb is None else int(max_submission_gb * 1024**3)
+            if limit is not None and total_size(lease) > limit:
+                raise EvaluationError(
+                    f"brain_check_failed: sealed weights are {total_size(lease)} bytes; "
+                    f"limit is {max_submission_gb} GB",
+                    recoverable=False,
+                )
+
+            async def refresh() -> Any:
+                return await self.api.request_weight_lease(
+                    tournament_id=tournament_id,
+                    agent_id=agent.id,
+                    validator_hotkey=self.validator_hotkey,
+                )
+
+            logger.info(f"Downloading {len(manifest)} sealed weight file(s) for agent {agent.id}")
+            try:
+                await download_weights(lease, weights_dir, refresh_lease=refresh)
+            except WeightMismatchError as e:
+                self._defer(
+                    agent, f"downloaded weights failed verification: {e}", "weights_mismatch"
+                )
+            except (WeightFetchError, APIError) as e:
+                self._defer(agent, f"sealed weights could not be downloaded: {e}")
+        finally:
+            await self.api.release_weight_lease(
+                tournament_id=tournament_id,
+                agent_id=agent.id,
+                validator_hotkey=self.validator_hotkey,
+            )
 
     # -- Pipeline steps -------------------------------------------------------
 
@@ -332,7 +535,7 @@ class AgentEvaluator:
         except asyncio.TimeoutError:
             raise EvaluationError(
                 f"Model weight validation timed out after "
-                f"{self.MODEL_VALIDATION_TIMEOUT}s — file is likely corrupt "
+                f"{self.MODEL_VALIDATION_TIMEOUT}s â€” file is likely corrupt "
                 f"or not a valid PyTorch checkpoint",
                 recoverable=False,
             )

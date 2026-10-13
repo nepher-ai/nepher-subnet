@@ -6,6 +6,8 @@ without importing heavy chain dependencies.
 
 from typing import Iterable, Optional, Sequence, Tuple
 
+from nepher_core.custody import MODE_HUGGINGFACE, STATUS_ARCHIVED
+
 
 # Fraction of total weight allocated to each non-reward tournament's
 # preliminary leader.
@@ -16,6 +18,26 @@ DEFAULT_BURN_UID = 0
 
 # (uid, share_of_remainder) — shares should sum to ~1.0 across recipients.
 RewardRecipient = Tuple[int, float]
+
+
+def custody_payout_blockers(podium: Sequence, submission_mode: str) -> list:
+    """Return the paid podium entries whose custody blocks a payout.
+
+    A podium is gated when the tournament keeps weights on Hugging Face or any entry
+    carries a custody status. A gated payout needs every paid place ``archived``; if any
+    place is not, the caller burns the whole remainder. Inline tournaments without custody
+    statuses are never gated and always return an empty list.
+    """
+    gated = submission_mode == MODE_HUGGINGFACE or any(
+        p.custody_status is not None for p in podium
+    )
+    if not gated:
+        return []
+    return [
+        p
+        for p in podium
+        if p.hotkey and p.reward_share > 0 and p.custody_status != STATUS_ARCHIVED
+    ]
 
 
 def compute_weight_distribution(

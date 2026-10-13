@@ -86,6 +86,29 @@ The CLI uses your stored credentials from `npcli login` (or pass `--api-key`). I
 
 > 💡 You can submit multiple times — only your **latest** submission per hotkey is evaluated. Submit early so you have time to iterate.
 
+### Tournaments with weights on Hugging Face
+
+Large-model tournaments (VLA, WAM, LWM) do not accept weight uploads. Your weights stay in **your own private Hugging Face repo** and you upload only the code archive plus a signed seal of the repo and its file hashes. The tournament page shows its submission mode.
+
+1. Create a **private** model repo under your **user** account (not an organization) and push `weights/`.
+2. In `agent.yaml`, list every weight file as `path: sha256`.
+3. Run `npcli tournament proof --path ./my-agent --tournament-id <id>`, copy the generated `nepher-proof.json` to the repo root, push, and note the full 40-character commit SHA.
+4. Create a **fine-grained** Hugging Face token with read access to that one repo and nothing else.
+5. `npcli tournament check --path ./my-agent --submission-mode huggingface`, then:
+
+```bash
+npcli tournament submit --path ./my-agent --tournament-id <id> \
+    --hf-repo alice/my-weights --hf-revision <40-hex commit> --hf-token <read-only token>
+```
+
+Rules that disqualify a submission:
+
+- The repo must stay **private** and the token must stay valid until the tournament ends.
+- Do **not change or delete** the sealed files after submitting. Nepher re-checks them continuously, and the winner's weights are copied to Nepher before the result is announced. A changed file disqualifies you from rewards.
+- The repo must be yours. Another miner's repo or token is rejected, and one Hugging Face account maps to one hotkey.
+- The same weights cannot be submitted twice, under any file names, by any hotkey. A new submission needs different weights. It replaces your earlier one while the submit window is open.
+- The public base checkpoint listed by the tournament may be submitted. Only the first submission of those exact files is accepted; a later copy is rejected. A submission that also contains your own weights may still include the base files.
+
 ---
 
 ## Appendix: Self-Evaluate (same pipeline as validators)

@@ -15,12 +15,16 @@ tournaments:
 """
 
 import asyncio
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Optional
 
 from nepher_core.api import TournamentAPI, Tournament, Agent, QuietZoneError
 from nepher_core.config import ValidatorConfig
 from nepher_core.utils.logging import get_logger
-from validator.evaluation.agent_evaluator import AgentEvaluator, EvaluationError
+from validator.evaluation.agent_evaluator import (
+    AgentEvaluator,
+    EvaluationDeferred,
+    EvaluationError,
+)
 from validator.state import TournamentPeriod, get_current_period
 
 logger = get_logger(__name__)
@@ -223,7 +227,7 @@ class EvaluationOrchestrator:
                     continue
                 prepared.add(tid)
 
-            await self._evaluate_one(tid, agent)
+            await self._evaluate_one(tid, agent, tournament)
             processed += 1
             await asyncio.sleep(self.AGENT_DELAY)
 
@@ -243,14 +247,40 @@ class EvaluationOrchestrator:
             logger.warning(f"[{tournament_id}] failed to fetch pending agents: {e}")
             return []
 
-    async def _evaluate_one(self, tournament_id: str, agent: Agent) -> None:
+    async def _evaluate_one(
+        self,
+        tournament_id: str,
+        agent: Agent,
+        tournament: Optional[Tournament] = None,
+    ) -> None:
         """Evaluate a single agent, handling failures + reporting."""
         try:
-            await self.evaluator.evaluate(tournament_id=tournament_id, agent=agent)
+            if tournament is None:
+                await self.evaluator.evaluate(tournament_id=tournament_id, agent=agent)
+            else:
+                await self.evaluator.evaluate(
+                    tournament_id=tournament_id,
+                    agent=agent,
+                    submission_mode=tournament.submission_mode,
+                    base_weight_sha256=tournament.base_weight_sha256,
+                )
             self._evaluated_count += 1
 
         except QuietZoneError:
             logger.info(f"[{tournament_id}] quiet zone reached during agent {agent.id}")
+
+        except EvaluationDeferred as e:
+            # No score is submitted: a custody or download problem is not the miner's score.
+            logger.warning(f"Evaluation deferred for agent {agent.id}: {e.message}")
+            if e.report_type:
+                await self.api.report_agent(
+                    tournament_id=tournament_id,
+                    agent_id=agent.id,
+                    validator_hotkey=self.validator_hotkey,
+                    log_content=e.message,
+                    error_type=e.report_type,
+                    summary=e.message[:500],
+                )
 
         except EvaluationError as e:
             logger.error(f"Evaluation failed for agent {agent.id}: {e.message}")
