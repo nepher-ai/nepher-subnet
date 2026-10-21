@@ -48,6 +48,8 @@ class ValidatorOrchestrator:
     BURN_INTERVAL = 1800  # 30 minutes
     # Backwards-compatible alias used in logs/tests.
     WEIGHT_INTERVAL = 1800
+    # Retry cadence after a failed weight cycle (API or chain error).
+    WEIGHT_RETRY_INTERVAL = 120
 
     def __init__(
         self,
@@ -171,6 +173,7 @@ class ValidatorOrchestrator:
             self._weight_setter = WeightSetter(self.config, self.api)
 
         while True:
+            delay = self.BURN_INTERVAL
             try:
                 tournaments = await self._get_active_tournaments()
                 self.state.prune({str(t.id) for t in tournaments})
@@ -185,9 +188,16 @@ class ValidatorOrchestrator:
 
                 await self._weight_setter.set_combined_weights(tournaments)
             except Exception as e:
-                logger.error(f"Weight loop error: {e}", exc_info=True)
+                # A failed lookup must never become a burn: keep the existing
+                # on-chain weights and retry soon.
+                delay = self.WEIGHT_RETRY_INTERVAL
+                logger.error(
+                    f"Weight cycle skipped — on-chain weights unchanged, retrying in "
+                    f"{delay}s: {e}",
+                    exc_info=True,
+                )
 
-            await asyncio.sleep(self.BURN_INTERVAL)
+            await asyncio.sleep(delay)
 
     # -- Evaluation loop (gpu only) ------------------------------------------
 

@@ -63,6 +63,10 @@ class EvaluationOrchestrator:
         self._evaluated_count = 0
         self._failed_count = 0
 
+        # (tournament_id, agent_id) -> count of recoverable (validator-side)
+        # failures. Agents at the limit are skipped instead of being scored 0.
+        self._infra_attempts: dict[tuple[str, str], int] = {}
+
     @property
     def stats(self) -> dict:
         """Get evaluation statistics."""
@@ -206,6 +210,9 @@ class EvaluationOrchestrator:
             if tid in failed_setup:
                 continue
 
+            if self._infra_attempts.get((tid, agent.id), 0) >= self.config.retry.evaluation_max_attempts:
+                continue
+
             tournament = tournament_by_id.get(tid)
             if tournament is None:
                 continue
@@ -248,11 +255,32 @@ class EvaluationOrchestrator:
         try:
             await self.evaluator.evaluate(tournament_id=tournament_id, agent=agent)
             self._evaluated_count += 1
+            self._infra_attempts.pop((tournament_id, agent.id), None)
 
         except QuietZoneError:
             logger.info(f"[{tournament_id}] quiet zone reached during agent {agent.id}")
 
         except EvaluationError as e:
+            if e.recoverable:
+                # Validator-side failure (Docker, network, config): never record
+                # a score. The agent stays pending and is retried next cycle.
+                key = (tournament_id, agent.id)
+                attempts = self._infra_attempts.get(key, 0) + 1
+                self._infra_attempts[key] = attempts
+                max_attempts = self.config.retry.evaluation_max_attempts
+                if attempts >= max_attempts:
+                    logger.error(
+                        f"[{tournament_id}] agent {agent.id}: infrastructure failure "
+                        f"{attempts}x — not retrying until validator restart. "
+                        f"Fix the validator host: {e.message}"
+                    )
+                else:
+                    logger.warning(
+                        f"[{tournament_id}] agent {agent.id}: infrastructure failure "
+                        f"(attempt {attempts}/{max_attempts}), will retry: {e.message}"
+                    )
+                return
+
             logger.error(f"Evaluation failed for agent {agent.id}: {e.message}")
             self._failed_count += 1
 

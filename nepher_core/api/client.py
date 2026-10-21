@@ -6,6 +6,7 @@ Used by both miners (submission) and validators (evaluation, reward).
 """
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Optional, Any
 from urllib.parse import urljoin
@@ -40,6 +41,9 @@ from nepher_core.api.exceptions import (
 from nepher_core.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Plain DNS names only — whitelist entries end up in the sandbox environment.
+_DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
 
 class TournamentAPI:
@@ -164,7 +168,7 @@ class TournamentAPI:
             raise RateLimitError(
                 message,
                 status_code=status,
-                retry_after=int(retry_after) if retry_after else None,
+                retry_after=int(retry_after) if retry_after and retry_after.isdigit() else None,
             )
         else:
             raise APIError(message, status_code=status, response_body=raw_body)
@@ -173,6 +177,7 @@ class TournamentAPI:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=30),
         retry=retry_if_exception_type((httpx.TransportError, RateLimitError)),
+        reraise=True,
     )
     async def _request(
         self,
@@ -234,8 +239,13 @@ class TournamentAPI:
         only the fields required by subnet validators.
         
         Returns:
-            Tournament if active, None otherwise
-            
+            Tournament if active, None when the backend reports none (404 or
+            empty body).
+
+        Raises:
+            APIError: On any other backend failure. Callers must not treat a
+                failed lookup as "no tournament" (that would burn weights).
+
         Endpoint: GET /api/v1/tournaments/active?subnet=true
         """
         try:
@@ -245,23 +255,20 @@ class TournamentAPI:
                 "/api/v1/tournaments/active",
                 params={"subnet": "true"},
             )
-            data = response.json()
-            if data:
-                tournament = Tournament(**data)
-                logger.info(
-                    f"Active tournament found: {tournament.id} "
-                    f"(status={tournament.status}, name={tournament.name})"
-                )
-                return tournament
-            else:
-                logger.info("API returned empty response — no active tournament")
-                return None
         except NotFoundError:
             logger.info("No active tournament (404)")
             return None
-        except APIError as e:
-            logger.error(f"Failed to fetch active tournament: {e}")
+
+        data = response.json()
+        if not data:
+            logger.info("API returned empty response — no active tournament")
             return None
+        tournament = Tournament(**data)
+        logger.info(
+            f"Active tournament found: {tournament.id} "
+            f"(status={tournament.status}, name={tournament.name})"
+        )
+        return tournament
 
     async def get_active_tournaments(self, subnet: bool = True) -> list[Tournament]:
         """
@@ -272,11 +279,17 @@ class TournamentAPI:
         validators need.
 
         Falls back to the deprecated single-tournament ``GET /active`` endpoint
-        when ``/active/list`` is unavailable (older backends), so an upgraded
-        validator keeps working against a not-yet-upgraded backend.
+        when ``/active/list`` returns 404 (older backends without the route),
+        so an upgraded validator keeps working against a not-yet-upgraded
+        backend.
 
         Returns:
             List of active tournaments (possibly empty).
+
+        Raises:
+            APIError: On backend failure (5xx, auth, malformed JSON...). An
+                empty list is only returned when the backend positively
+                reports no active tournaments.
 
         Endpoint: GET /api/v1/tournaments/active/list?subnet=true
         """
@@ -286,20 +299,20 @@ class TournamentAPI:
                 "/api/v1/tournaments/active/list",
                 params={"subnet": "true" if subnet else "false"},
             )
-            data = response.json() or {}
-            items = data.get("tournaments", []) if isinstance(data, dict) else []
-            tournaments = [Tournament(**item) for item in items]
-            logger.info(f"Active tournaments found: {len(tournaments)}")
-            return tournaments
         except NotFoundError:
-            logger.info("No active tournaments (404)")
-            return []
-        except APIError as e:
-            logger.warning(
-                f"/active/list failed ({e}); falling back to single /active endpoint"
-            )
+            logger.info("/active/list returned 404; checking single /active endpoint")
             single = await self.get_active_tournament()
             return [single] if single is not None else []
+
+        data = response.json() or {}
+        if not isinstance(data, dict) or not isinstance(data.get("tournaments", []), list):
+            raise APIError(
+                f"Malformed /active/list response: {str(data)[:200]}",
+                status_code=response.status_code,
+            )
+        tournaments = [Tournament(**item) for item in data.get("tournaments", [])]
+        logger.info(f"Active tournaments found: {len(tournaments)}")
+        return tournaments
 
     async def get_tournament(self, tournament_id: str) -> Tournament:
         """
@@ -417,8 +430,12 @@ class TournamentAPI:
             phase: Leaderboard phase to query (``"public"`` during evaluation,
                    ``"private"`` during review when final scores are available).
 
-        Returns an empty PreliminaryLeaderInfo (leader_hotkey=None) on any
-        error, mirroring the graceful fallback pattern of get_winner_hotkey.
+        Returns an empty PreliminaryLeaderInfo (leader_hotkey=None) when the
+        backend reports no leader (404).
+
+        Raises:
+            APIError: On any other failure, so the caller can skip the weight
+                cycle instead of silently moving the leader's share.
 
         Endpoint: GET /api/v1/tournaments/{id}/preliminary-leader?phase=...
         """
@@ -428,10 +445,9 @@ class TournamentAPI:
                 f"/api/v1/tournaments/{tournament_id}/preliminary-leader",
                 params={"phase": phase},
             )
-            return PreliminaryLeaderInfo(**response.json())
-        except Exception as e:
-            logger.warning(f"Failed to fetch preliminary leader: {e}")
+        except NotFoundError:
             return PreliminaryLeaderInfo()
+        return PreliminaryLeaderInfo(**response.json())
 
     # =========================================================================
     # Agent Endpoints
@@ -579,22 +595,27 @@ class TournamentAPI:
         self,
         agent_id: str,
         output_path: Path,
+        max_bytes: Optional[int] = None,
     ) -> Path:
         """
         Download agent ZIP file.
-        
+
         Args:
             agent_id: Agent ID
             output_path: Path to save the file
-            
+            max_bytes: Abort (and delete the partial file) past this size
+
         Returns:
             Path to downloaded file
-            
+
+        Raises:
+            ValueError: If the download exceeds *max_bytes*
+
         Endpoint: GET /api/v1/agents/download/{id}
         """
         client = await self._get_client()
         url = self._build_url(f"/api/v1/agents/download/{agent_id}")
-        
+
         async with client.stream(
             "GET",
             url,
@@ -603,13 +624,27 @@ class TournamentAPI:
             if response.status_code >= 400:
                 await response.aread()
                 self._handle_error_response(response)
-            
+
+            declared = response.headers.get("content-length", "")
+            if max_bytes is not None and declared.isdigit() and int(declared) > max_bytes:
+                raise ValueError(f"Agent archive too large ({declared} > {max_bytes} bytes)")
+
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "wb") as f:
-                async for chunk in response.aiter_bytes(chunk_size=8192):
-                    f.write(chunk)
-        
-        logger.info(f"Downloaded agent to {output_path}")
+            received = 0
+            try:
+                with open(output_path, "wb") as f:
+                    async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):
+                        received += len(chunk)
+                        if max_bytes is not None and received > max_bytes:
+                            raise ValueError(
+                                f"Agent archive exceeds {max_bytes} bytes; download aborted"
+                            )
+                        f.write(chunk)
+            except BaseException:
+                output_path.unlink(missing_ok=True)
+                raise
+
+        logger.info(f"Downloaded agent to {output_path} ({received} bytes)")
         return output_path
 
     # =========================================================================
@@ -797,16 +832,16 @@ class TournamentAPI:
             1. POST /api/v1/evaluations/submit/verify
             2. POST /api/v1/evaluations/submit (Form + X-Upload-Token)
         """
-        import hashlib
         import json
 
-        # Calculate log hash if log file exists
+        from nepher_core.utils.helpers import compute_checksum
+
+        # Calculate log hash if log file exists (streamed, not loaded into memory)
         log_hash: Optional[str] = None
         log_file_size: Optional[int] = None
         if log_file and log_file.exists():
-            content = log_file.read_bytes()
-            log_hash = hashlib.sha256(content).hexdigest()
-            log_file_size = len(content)
+            log_hash = compute_checksum(log_file)
+            log_file_size = log_file.stat().st_size
 
         # Step 1: Verify and get upload token
         token = await self._verify_evaluation_submit(
@@ -1052,11 +1087,15 @@ class TournamentAPI:
         try:
             response = await self._request("GET", "/api/v1/admin/whitelist/domains")
             data = response.json()
-            domains = [
-                item["domain"]
-                for item in data.get("items", [])
-                if item.get("is_active")
-            ]
+            domains: list[str] = []
+            for item in data.get("items", []):
+                if not item.get("is_active"):
+                    continue
+                domain = str(item.get("domain", "")).strip().lower().rstrip(".")
+                if _DOMAIN_RE.match(domain):
+                    domains.append(domain)
+                else:
+                    logger.warning(f"Ignoring invalid whitelist domain: {domain!r}")
             logger.info(f"Fetched {len(domains)} whitelist domains: {domains}")
             return domains
         except Exception as e:

@@ -29,6 +29,7 @@ Multiple tournaments can be active simultaneously. Validators emit a single comb
 - Each **non-reward** tournament allocates **1% (fixed)** to its current preliminary leader (if present in the metagraph).
 - The **reward-period** tournament's approved podium receives all remaining weight (`1 − 1% × N leaders`), split by normalized ratios (default **7:2:1** for three places). Missing places redistribute among those present; UIDs not in the metagraph burn their share.
 - Anything unresolved — no active tournaments, no approved winner, or no podium UIDs in metagraph — **burns on UID 0**.
+- A failed backend or chain lookup is not "unresolved": the validator skips that cycle, leaves on-chain weights unchanged, and retries in 2 minutes.
 
 Tournament reward periods must not overlap, except when a tournament has confirmed
 no winner — that tournament's reward window may be overlapped by another. Weights

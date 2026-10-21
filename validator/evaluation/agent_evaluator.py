@@ -10,24 +10,21 @@ Handles the complete evaluation flow for a single agent:
 
 """
 
-import asyncio
 import json
-import os
 import shutil
-import sys
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Optional, Any
 
 import yaml
 
-from nepher_core.api import TournamentAPI, Agent, APIError
+from nepher_core.api import TournamentAPI, Agent, APIError, QuietZoneError
 from nepher_core.config import ValidatorConfig
 from nepher_core.utils.helpers import (
     unzip_file,
     clean_directory,
     zip_directory,
-    run_command_async,
 )
 from nepher_core.utils.logging import get_logger
 from validator.evaluation.sandbox import SandboxRunner, SandboxError
@@ -58,8 +55,10 @@ class AgentEvaluator:
     6. Cleanup
     """
 
-    MODEL_VALIDATION_TIMEOUT = 120  # seconds — fast-fail on corrupt/unloadable checkpoints
     MAX_POLICY_SIZE_MB = 2048  # reject files larger than 2 GB
+    MAX_AGENT_ARCHIVE_BYTES = 4 * 1024**3  # download cap (compressed)
+    MAX_AGENT_UNZIPPED_BYTES = 8 * 1024**3  # extraction cap (uncompressed)
+    MAX_LOG_ARCHIVE_BYTES = 200 * 1024**2  # eval-log upload cap (uncompressed)
 
     def __init__(
         self,
@@ -126,12 +125,14 @@ class AgentEvaluator:
 
             result = await self._run_sandboxed_evaluation(task_module)
 
-        except EvaluationError:
+        except (EvaluationError, QuietZoneError):
             raise
         except SandboxError as e:
             logger.error(f"Sandbox evaluation failed: {e}")
             raise EvaluationError(str(e), recoverable=e.recoverable, log_output=e.log_output)
         except Exception as e:
+            # Unknown errors (API, Docker CLI, filesystem) are validator-side:
+            # never record them as the agent's score.
             logger.error(f"Evaluation failed: {e}")
             raise EvaluationError(str(e), recoverable=True)
         finally:
@@ -161,7 +162,7 @@ class AgentEvaluator:
         if not task_config_path.exists():
             raise EvaluationError(
                 f"Task configuration not found: {task_config_path}",
-                recoverable=False,
+                recoverable=True,
             )
         with open(task_config_path, "r") as f:
             task_config = yaml.safe_load(f) or {}
@@ -169,7 +170,7 @@ class AgentEvaluator:
         if not task_module:
             raise EvaluationError(
                 "task_module missing from task configuration",
-                recoverable=False,
+                recoverable=True,
             )
         return task_module
 
@@ -193,12 +194,26 @@ class AgentEvaluator:
             tmp_path = Path(tmp.name)
 
         try:
-            await self.api.download_agent(agent.id, tmp_path)
+            try:
+                await self.api.download_agent(
+                    agent.id, tmp_path, max_bytes=self.MAX_AGENT_ARCHIVE_BYTES
+                )
+            except ValueError as e:
+                raise EvaluationError(str(e), recoverable=False) from e
             self.registry_path.mkdir(parents=True, exist_ok=True)
-            unzip_file(tmp_path, self.registry_path)
+            try:
+                unzip_file(
+                    tmp_path,
+                    self.registry_path,
+                    max_total_bytes=self.MAX_AGENT_UNZIPPED_BYTES,
+                )
+            except (ValueError, zipfile.BadZipFile) as e:
+                raise EvaluationError(f"Invalid agent archive: {e}", recoverable=False) from e
             logger.info(f"Agent extracted to: {self.registry_path}")
         finally:
             tmp_path.unlink(missing_ok=True)
+
+        self._check_policy_size()
 
     def _resolve_policy_path(self) -> Optional[str]:
         """
@@ -215,15 +230,10 @@ class AgentEvaluator:
         logger.warning(f"Policy checkpoint not found: {policy_file}")
         return None
 
-    async def _validate_model_weights(self) -> None:
-        """
-        Pre-flight check: load the policy checkpoint in an isolated subprocess
-        with a tight timeout.  Catches corrupt, incompatible, or adversarial
-        .pt files in ~2 minutes instead of burning the full evaluation timeout.
-        Skipped when no policy file is present (some tasks don't require one).
-        """
+    def _check_policy_size(self) -> None:
+        """Reject oversized policy checkpoints before spawning a sandbox."""
         policy_file = self.registry_path / "best_policy" / "best_policy.pt"
-        if not policy_file.exists():
+        if not policy_file.is_file():
             return
 
         size_mb = policy_file.stat().st_size / (1024 * 1024)
@@ -233,41 +243,6 @@ class AgentEvaluator:
                 f"limit {self.MAX_POLICY_SIZE_MB} MB)",
                 recoverable=False,
             )
-
-        logger.info(
-            f"Validating model weights ({size_mb:.1f} MB, "
-            f"timeout {self.MODEL_VALIDATION_TIMEOUT}s)..."
-        )
-
-        validation_script = (
-            "import sys, torch; "
-            "cp = torch.load(sys.argv[1], map_location='cpu', weights_only=True); "
-            "t = type(cp).__name__; "
-            "n = len(cp) if isinstance(cp, dict) else -1; "
-            "print(f'OK type={t} keys={n}')"
-        )
-
-        try:
-            return_code, stdout, stderr = await run_command_async(
-                [sys.executable, "-c", validation_script, str(policy_file)],
-                timeout=self.MODEL_VALIDATION_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            raise EvaluationError(
-                f"Model weight validation timed out after "
-                f"{self.MODEL_VALIDATION_TIMEOUT}s — file is likely corrupt "
-                f"or not a valid PyTorch checkpoint",
-                recoverable=False,
-            )
-
-        if return_code != 0:
-            detail = (stderr or stdout)[-500:]
-            raise EvaluationError(
-                f"Model weight validation failed: {detail}",
-                recoverable=False,
-            )
-
-        logger.info(f"Model weights validated: {stdout.strip()}")
 
     def _build_eval_config(self) -> Path:
         """
@@ -279,7 +254,7 @@ class AgentEvaluator:
         if not task_config_path.exists():
             raise EvaluationError(
                 f"Task config not found: {task_config_path}",
-                recoverable=False,
+                recoverable=True,
             )
 
         with open(task_config_path, "r") as f:
@@ -294,7 +269,7 @@ class AgentEvaluator:
                 f"task_config.yaml for tournament {self.tn_workspace.name} is missing "
                 f"'task_type'. Add the correct task_type (e.g. 'navigation.spot') to "
                 f"the tournament's eval config in the database.",
-                recoverable=False,
+                recoverable=True,
             )
 
         policy_path = self._resolve_policy_path()
@@ -379,13 +354,18 @@ class AgentEvaluator:
             return None
 
         log_path = Path(log_dir)
-        if not log_path.exists():
+        if log_path.is_symlink() or not log_path.is_dir():
             return None
 
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
             archive_path = Path(tmp.name)
 
-        zip_directory(log_path, archive_path)
+        try:
+            zip_directory(log_path, archive_path, max_total_bytes=self.MAX_LOG_ARCHIVE_BYTES)
+        except ValueError as e:
+            logger.warning(f"Skipping eval-log upload: {e}")
+            archive_path.unlink(missing_ok=True)
+            return None
         return archive_path
 
     async def _cleanup(self, tournament_id: str) -> None:

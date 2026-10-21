@@ -18,6 +18,7 @@ import bittensor as bt
 from bittensor_wallet import Wallet
 
 from nepher_core.api import TournamentAPI, Tournament
+from nepher_core.api.models import PodiumWinnerInfo
 from nepher_core.config import ValidatorConfig
 from nepher_core.wallet.utils import (
     load_wallet,
@@ -32,16 +33,31 @@ from validator.reward.distribution import compute_weight_distribution, RewardRec
 logger = get_logger(__name__)
 
 
+class WeightLookupError(Exception):
+    """A backend lookup needed for the weight vector failed.
+
+    Raised instead of falling back to a burn so that a transient API failure
+    leaves the existing on-chain weights untouched.
+    """
+
+
 def compute_weight_hash(weight_map: dict[int, float]) -> str:
     """Deterministic SHA-256 of a weight distribution."""
     canonical = ",".join(f"{uid}:{w}" for uid, w in sorted(weight_map.items()))
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _as_utc(ts: datetime) -> datetime:
+    """Naive timestamps from the backend are UTC; aware ones are converted."""
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
 class WeightSetter:
     """
     Handles weight setting during reward phase.
-    
+
     Responsibilities:
     - Query winner from tournament API
     - Find winner's UID in metagraph
@@ -53,6 +69,8 @@ class WeightSetter:
     BURN_UID = 0  # UID to burn to when no winner
     LEADER_WEIGHT_FRACTION = 0.01  # 1% emission to preliminary leader
     DEDUP_WINDOW = 900  # 15 minutes — skip if identical weights committed within this window
+    METAGRAPH_TIMEOUT = 120  # seconds
+    SET_WEIGHTS_TIMEOUT = 180  # seconds per attempt
 
     def __init__(
         self,
@@ -61,7 +79,7 @@ class WeightSetter:
     ):
         """
         Initialize weight setter.
-        
+
         Args:
             config: Validator configuration
             api: Tournament API client
@@ -82,65 +100,36 @@ class WeightSetter:
             )
         return self._wallet
 
-    def _get_subtensor(self) -> bt.Subtensor:
-        """Get subtensor connection."""
+    async def _get_subtensor(self) -> bt.Subtensor:
+        """Get (or lazily open) the subtensor connection off the event loop."""
         if self._subtensor is None:
-            self._subtensor = get_subtensor(self.config.subnet.network)
+            self._subtensor = await asyncio.wait_for(
+                asyncio.to_thread(get_subtensor, self.config.subnet.network),
+                timeout=self.METAGRAPH_TIMEOUT,
+            )
         return self._subtensor
 
-    def _get_metagraph(self) -> bt.Metagraph:
-        """Get and cache metagraph."""
-        subtensor = self._get_subtensor()
-        # Always refresh metagraph for reward
-        self._metagraph = get_metagraph(subtensor, self.config.subnet.subnet_uid)
-        return self._metagraph
-
-    WEIGHT_SET_INTERVAL = 1800  # Re-set weights every 30 minutes
-
-    async def burn(
-        self,
-        tournament_id: Optional[str] = None,
-        phase: str = "public",
-    ) -> None:
-        """
-        Burn on UID 0, optionally allocating 1% to the preliminary leader.
-
-        When *tournament_id* is provided the method fetches the current
-        leaderboard leader from the backend.  If a leader is found and
-        present in the metagraph, weights are split as
-        ``{leader_uid: 1%, BURN_UID: 99%}``.  Otherwise 100% is burned.
-
-        Args:
-            tournament_id: Tournament to look up the leader for.
-            phase: Leaderboard phase — ``"public"`` during evaluation,
-                   ``"private"`` during review when final scores are available.
-        """
-        metagraph = self._get_metagraph()
-
-        if tournament_id is not None:
+    def _reset_subtensor(self) -> None:
+        """Drop a possibly-dead connection so the next call reconnects."""
+        subtensor, self._subtensor = self._subtensor, None
+        if subtensor is not None:
             try:
-                leader = await self.api.get_preliminary_leader(tournament_id, phase=phase)
-                if leader.leader_hotkey:
-                    leader_uid = find_uid_for_hotkey(metagraph, leader.leader_hotkey)
-                    if leader_uid is not None:
-                        logger.info(
-                            f"Preliminary leader UID {leader_uid} "
-                            f"(hotkey {leader.leader_hotkey[:16]}…) — "
-                            f"allocating {self.LEADER_WEIGHT_FRACTION:.0%} weight"
-                        )
-                        await self._set_weight_distribution(
-                            {
-                                leader_uid: self.LEADER_WEIGHT_FRACTION,
-                                self.BURN_UID: 1.0 - self.LEADER_WEIGHT_FRACTION,
-                            },
-                            metagraph,
-                        )
-                        return
-            except Exception as e:
-                logger.warning(f"Preliminary leader lookup failed, falling back to full burn: {e}")
+                subtensor.close()
+            except Exception:
+                pass
 
-        logger.info("Burning on UID 0")
-        await self._set_weight_distribution({self.BURN_UID: 1.0}, metagraph)
+    async def _get_metagraph(self) -> bt.Metagraph:
+        """Fetch a fresh metagraph without blocking the event loop."""
+        try:
+            subtensor = await self._get_subtensor()
+            self._metagraph = await asyncio.wait_for(
+                asyncio.to_thread(get_metagraph, subtensor, self.config.subnet.subnet_uid),
+                timeout=self.METAGRAPH_TIMEOUT,
+            )
+        except Exception:
+            self._reset_subtensor()
+            raise
+        return self._metagraph
 
     async def set_combined_weights(self, tournaments: List[Tournament]) -> None:
         """
@@ -153,8 +142,11 @@ class WeightSetter:
 
         Args:
             tournaments: All currently-active tournaments (may be empty).
+
+        Raises:
+            WeightLookupError: If a backend lookup failed; no weights are set.
         """
-        metagraph = self._get_metagraph()
+        metagraph = await self._get_metagraph()
 
         if not tournaments:
             logger.info("No active tournaments — burning 100% on UID 0")
@@ -179,12 +171,16 @@ class WeightSetter:
           winner for the remainder (``1 - sum(fixed allocations)``). Confirmed
           no-winner tournaments may legally overlap and are skipped for remainder.
         - If there is no reward tournament with an approved winner (or its winner
-          is unavailable/not in the metagraph), the remainder burns on UID 0.
+          is not in the metagraph), the remainder burns on UID 0.
         - Duplicate UIDs (leader == winner == burn) are merged by addition; the
           final map is normalized to sum to 1.0.
 
         Tournaments are processed in a deterministic (id-sorted) order so that
         CPU and GPU validators sharing a hotkey produce identical weight hashes.
+
+        Raises:
+            WeightLookupError: If a leader or winner lookup failed. A failed
+                lookup is never treated as "no leader" / "no winner".
         """
         sorted_tournaments = sorted(tournaments, key=lambda t: str(t.id))
 
@@ -207,10 +203,9 @@ class WeightSetter:
             try:
                 leader = await self.api.get_preliminary_leader(tournament.id, phase=phase)
             except Exception as e:
-                logger.warning(
+                raise WeightLookupError(
                     f"[{tournament.id}] preliminary-leader lookup failed: {e}"
-                )
-                continue
+                ) from e
 
             if not leader.leader_hotkey:
                 continue
@@ -278,76 +273,56 @@ class WeightSetter:
         """Resolve podium places to ``(uid, share)`` pairs.
 
         Places whose hotkey is missing from the metagraph are skipped; their
-        share burns with the unallocated remainder. Returns an empty list when
-        no approved winner can be resolved (caller burns the remainder).
+        share burns with the unallocated remainder. Returns an empty list only
+        when the backend confirms there is no approved winner (or no podium
+        hotkey is registered).
+
+        Raises:
+            WeightLookupError: If the winner lookup itself failed.
         """
         logger.info("Querying winners from tournament API...")
 
         try:
             winner_info = await self.api.get_winner_hotkey(tournament_id)
-
-            if not winner_info.winner_approved:
-                logger.info("No winner approved - will burn remainder on UID 0")
-                return []
-
-            podium = list(winner_info.winners or [])
-            if not podium and winner_info.winner_hotkey:
-                from nepher_core.api.models import PodiumWinnerInfo
-
-                podium = [
-                    PodiumWinnerInfo(
-                        place=1,
-                        hotkey=winner_info.winner_hotkey,
-                        agent_id=winner_info.winner_agent_id,
-                        score=winner_info.winner_score,
-                        reward_share=1.0,
-                    )
-                ]
-
-            recipients: List[RewardRecipient] = []
-            for place in sorted(podium, key=lambda p: p.place):
-                if not place.hotkey or place.reward_share <= 0:
-                    continue
-                uid = find_uid_for_hotkey(metagraph, place.hotkey)
-                if uid is None:
-                    logger.warning(
-                        f"Place {place.place} hotkey not in metagraph — "
-                        f"share {place.reward_share:.1%} burns"
-                    )
-                    continue
-                logger.info(
-                    f"Place {place.place} -> UID {uid} "
-                    f"(share {place.reward_share:.1%})"
-                )
-                recipients.append((uid, float(place.reward_share)))
-
-            if not recipients:
-                logger.info("No podium UIDs resolved — will burn remainder on UID 0")
-            return recipients
-
         except Exception as e:
-            logger.error(f"Failed to get winners: {e}")
-            logger.info("Falling back to burn on UID 0")
+            raise WeightLookupError(f"[{tournament_id}] winner lookup failed: {e}") from e
+
+        if not winner_info.winner_approved:
+            logger.info("No winner approved - will burn remainder on UID 0")
             return []
 
-    async def _get_winner_uid(
-        self,
-        tournament_id: str,
-        metagraph: bt.Metagraph,
-    ) -> int:
-        """Legacy helper: return the first podium UID, or BURN_UID."""
-        recipients = await self._get_reward_recipients(tournament_id, metagraph)
-        if not recipients:
-            return self.BURN_UID
-        return recipients[0][0]
+        podium = list(winner_info.winners or [])
+        if not podium and winner_info.winner_hotkey:
+            podium = [
+                PodiumWinnerInfo(
+                    place=1,
+                    hotkey=winner_info.winner_hotkey,
+                    agent_id=winner_info.winner_agent_id,
+                    score=winner_info.winner_score,
+                    reward_share=1.0,
+                )
+            ]
 
-    async def _set_weights(
-        self,
-        target_uid: int,
-        metagraph: bt.Metagraph,
-    ) -> None:
-        """Set all weight to a single UID (convenience wrapper)."""
-        await self._set_weight_distribution({target_uid: 1.0}, metagraph)
+        recipients: List[RewardRecipient] = []
+        for place in sorted(podium, key=lambda p: p.place):
+            if not place.hotkey or place.reward_share <= 0:
+                continue
+            uid = find_uid_for_hotkey(metagraph, place.hotkey)
+            if uid is None:
+                logger.warning(
+                    f"Place {place.place} hotkey not in metagraph — "
+                    f"share {place.reward_share:.1%} burns"
+                )
+                continue
+            logger.info(
+                f"Place {place.place} -> UID {uid} "
+                f"(share {place.reward_share:.1%})"
+            )
+            recipients.append((uid, float(place.reward_share)))
+
+        if not recipients:
+            logger.info("No podium UIDs resolved — will burn remainder on UID 0")
+        return recipients
 
     async def _set_weight_distribution(
         self,
@@ -367,7 +342,6 @@ class WeightSetter:
             metagraph: Current metagraph.
         """
         wallet = self._load_wallet()
-        subtensor = self._get_subtensor()
         netuid = self.config.subnet.subnet_uid
         weight_hash = compute_weight_hash(weight_map)
 
@@ -377,24 +351,23 @@ class WeightSetter:
                 validator_hotkey=wallet.hotkey.ss58_address,
                 netuid=netuid,
             )
-            if (
-                latest is not None
-                and latest.weight_hash == weight_hash
-                and (datetime.now(timezone.utc) - latest.committed_at.replace(tzinfo=timezone.utc)).total_seconds()
-                < self.DEDUP_WINDOW
-            ):
-                age = int(
-                    (datetime.now(timezone.utc) - latest.committed_at.replace(tzinfo=timezone.utc)).total_seconds()
-                )
-                logger.info(
-                    f"Skipping redundant weight set (same hash committed {age}s ago)"
-                )
-                return
+            if latest is not None and latest.weight_hash == weight_hash:
+                age = (datetime.now(timezone.utc) - _as_utc(latest.committed_at)).total_seconds()
+                if age < self.DEDUP_WINDOW:
+                    logger.info(
+                        f"Skipping redundant weight set (same hash committed {int(age)}s ago)"
+                    )
+                    return
         except Exception as e:
             logger.debug(f"Weight commit dedup check failed, proceeding: {e}")
 
-        uids: List[int] = list(range(len(metagraph.uids)))
-        weights: List[float] = [0.0] * len(uids)
+        n = len(metagraph.uids)
+        out_of_range = [uid for uid in weight_map if not 0 <= uid < n]
+        if out_of_range:
+            raise WeightLookupError(f"UIDs {out_of_range} not in metagraph (n={n})")
+
+        uids: List[int] = list(range(n))
+        weights: List[float] = [0.0] * n
         for uid, w in weight_map.items():
             weights[uid] = w
 
@@ -407,13 +380,18 @@ class WeightSetter:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                success, message = subtensor.set_weights(
-                    wallet=wallet,
-                    netuid=netuid,
-                    uids=uids,
-                    weights=weights,
-                    wait_for_inclusion=True,
-                    wait_for_finalization=False,
+                subtensor = await self._get_subtensor()
+                success, message = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        subtensor.set_weights,
+                        wallet=wallet,
+                        netuid=netuid,
+                        uids=uids,
+                        weights=weights,
+                        wait_for_inclusion=True,
+                        wait_for_finalization=False,
+                    ),
+                    timeout=self.SET_WEIGHTS_TIMEOUT,
                 )
 
                 if success:
@@ -423,7 +401,8 @@ class WeightSetter:
                     logger.warning(f"Weight setting returned: {message}")
 
             except Exception as e:
-                logger.error(f"Attempt {attempt}/{max_attempts} failed: {e}")
+                logger.error(f"Attempt {attempt}/{max_attempts} failed: {e!r}")
+                self._reset_subtensor()
 
             if attempt < max_attempts:
                 logger.info(f"Retrying in {delay}s...")
@@ -432,19 +411,15 @@ class WeightSetter:
 
         # --- report on success ---
         if success:
-            try:
-                await self.api.report_weight_commit(
-                    validator_hotkey=wallet.hotkey.ss58_address,
-                    netuid=netuid,
-                    weight_hash=weight_hash,
-                    weight_data={str(uid): w for uid, w in weight_map.items()},
-                )
-            except Exception as e:
-                logger.debug(f"Failed to report weight commit: {e}")
+            await self.api.report_weight_commit(
+                validator_hotkey=wallet.hotkey.ss58_address,
+                netuid=netuid,
+                weight_hash=weight_hash,
+                weight_data={str(uid): w for uid, w in weight_map.items()},
+            )
             return
 
         logger.error(
             f"Failed to set weights after {max_attempts} attempts ({desc}); "
             "leaving existing on-chain weights unchanged"
         )
-

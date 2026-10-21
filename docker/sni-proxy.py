@@ -13,8 +13,10 @@ Protocol support:
 
 Design:
   iptables redirects outbound traffic to local ports where this proxy listens.
-  The proxy recovers the original destination via SO_ORIGINAL_DST, inspects the
-  first packet for a hostname, and either relays or drops the connection.
+  The proxy recovers the original destination via SO_ORIGINAL_DST (for the
+  port and for logging), inspects the first packet for a hostname, and either
+  drops the connection or relays it to that hostname as resolved by the proxy.
+  The client-chosen IP is never dialled.
   The proxy runs as a dedicated non-root user (sniproxy) so that iptables can
   exempt its own outbound connections from being redirected (--uid-owner).
 
@@ -32,6 +34,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import re
 import socket
 import struct
 import sys
@@ -145,12 +148,22 @@ def parse_http_host(data: bytes) -> str | None:
 # Whitelist matching
 # ---------------------------------------------------------------------------
 
+_HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+
+def is_valid_hostname(hostname: str) -> bool:
+    """True for a plain DNS name (no IP literals, ports, or odd characters)."""
+    return bool(_HOSTNAME_RE.match(hostname.lower().rstrip(".")))
+
+
 def matches_whitelist(hostname: str, whitelist: set[str]) -> bool:
     """Return True if *hostname* matches any entry in *whitelist*.
 
     Supports both exact matches and subdomain matches
     """
-    hostname = hostname.lower()
+    hostname = hostname.lower().rstrip(".")
+    if not is_valid_hostname(hostname):
+        return False
     for domain in whitelist:
         if hostname == domain or hostname.endswith("." + domain):
             return True
@@ -225,9 +238,11 @@ async def handle_connection(
 
         logger.info(f"[{proto}] [{client_addr}] -> {hostname} ({orig_ip}:{orig_port}) — ALLOWED")
 
-        # Connect to the real server and forward the initial data
+        # Connect to the *whitelisted hostname* (resolved by the proxy), never
+        # to the client-chosen destination IP: otherwise any IP is reachable
+        # by sending a whitelisted SNI / Host header.
         server_reader, server_writer = await asyncio.wait_for(
-            asyncio.open_connection(orig_ip, orig_port),
+            asyncio.open_connection(hostname, orig_port),
             timeout=10.0,
         )
         server_writer.write(data)
@@ -266,7 +281,15 @@ async def main() -> None:
                         help="Comma-separated list of allowed domains")
     args = parser.parse_args()
 
-    whitelist = {d.strip().lower() for d in args.whitelist.split(",") if d.strip()}
+    whitelist: set[str] = set()
+    for entry in args.whitelist.split(","):
+        domain = entry.strip().lower().rstrip(".")
+        if not domain:
+            continue
+        if is_valid_hostname(domain):
+            whitelist.add(domain)
+        else:
+            logger.warning(f"Ignoring invalid whitelist entry: {entry!r}")
     logger.info(f"Whitelisted domains: {whitelist}")
 
     servers: list[asyncio.Server] = []

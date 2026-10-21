@@ -6,7 +6,8 @@
 #   - No data access
 #   - No Docker socket access
 #   - Dropped capabilities (except DAC_READ_SEARCH for symlink resolution)
-#   - Agent code is volume-mounted, evaluated, and results written to output volume
+#   - Agent code installed and run as the unprivileged `evaluator` user after
+#     the firewall is up; only root writes results to the output volume
 
 FROM nvcr.io/nvidia/isaac-sim:6.1.0
 
@@ -35,6 +36,8 @@ RUN mkdir -p /var/lib/apt/lists/partial \
     python3 \
     iptables \
     libcap2-bin \
+    procps \
+    util-linux \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
@@ -42,6 +45,9 @@ RUN mkdir -p /var/lib/apt/lists/partial \
 # Runs as a dedicated user so iptables can exempt its outbound connections.
 COPY --chmod=755 docker/sni-proxy.py /usr/local/bin/sni-proxy.py
 RUN useradd --system --no-create-home --shell /usr/sbin/nologin sniproxy
+# Unprivileged user that installs and runs the (untrusted) miner task module.
+# It cannot write the root-owned scorer, Isaac Lab, or /sandbox/output.
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin evaluator
 
 # Clone Isaac Lab 3.0 and install against the binary Isaac Sim at ISAACSIM_PATH.
 # Official install path for Early Access / GA stabilization is release/3.0.0.

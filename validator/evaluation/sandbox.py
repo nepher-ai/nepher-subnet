@@ -7,6 +7,7 @@ Spawns a Docker container (nepher-sandbox) to run miner agent code in complete i
 
 import asyncio
 import json
+import math
 import os
 import shutil
 import uuid
@@ -24,6 +25,24 @@ DEFAULT_SANDBOX_IMAGE = "nepher-sandbox:isaacsim6.1-lab3.0"
 DEFAULT_MEMORY_LIMIT = "32g"
 DEFAULT_SHM_SIZE = "8g"
 DEFAULT_PIDS_LIMIT = 4096
+
+# Bytes of container output kept in memory for logging / reporting.
+LOG_TAIL_BYTES = 20_000
+
+# Largest evaluation_result.json the validator will parse.
+MAX_RESULT_BYTES = 1024 * 1024
+
+# entrypoint-sandbox.sh error codes caused by the validator host / image rather
+# than the miner's agent. These must never be recorded as an agent score.
+INFRA_ERROR_CODES = frozenset({
+    "gpu_unavailable",
+    "nepher_install_failed",
+    "proxy_failed",
+    "firewall_failed",
+    "eval_script_missing",
+    "eval_config_missing",
+    "no_task_module",
+})
 
 
 class SandboxError(Exception):
@@ -179,20 +198,21 @@ class SandboxRunner:
             )
 
             container_timeout = timeout + 120
+            # Container output goes to disk (outside the container-writable
+            # output dir) so a noisy agent cannot exhaust validator memory.
+            log_path = sandbox_dir / "container.log"
 
-            returncode, stdout, stderr = await self._run_cmd(
-                cmd, timeout=container_timeout
-            )
+            try:
+                returncode = await self._run_container(
+                    cmd, timeout=container_timeout, log_path=log_path
+                )
+            except SandboxError as e:
+                e.log_output = self._read_tail(log_path)
+                raise
 
-            # Combine sandbox output for logging and error reporting
-            sandbox_log = stdout or ""
-            if stderr:
-                sandbox_log += "\n--- stderr ---\n" + stderr
-
-            if stdout:
-                logger.info(f"Sandbox stdout (last 5000 chars):\n{stdout[-5000:]}")
-            if stderr:
-                logger.warning(f"Sandbox stderr (last 5000 chars):\n{stderr[-5000:]}")
+            sandbox_log = self._read_tail(log_path)
+            if sandbox_log:
+                logger.info(f"Sandbox output (last 5000 chars):\n{sandbox_log[-5000:]}")
 
             # Collect result from output directory
             try:
@@ -202,11 +222,21 @@ class SandboxRunner:
                 e.log_output = sandbox_log
                 raise
 
+            error_code = result.get("metadata", {}).get("error")
+            if error_code in INFRA_ERROR_CODES:
+                raise SandboxError(
+                    f"Sandbox infrastructure failure ({error_code}): "
+                    f"{result.get('summary', '')}",
+                    recoverable=True,
+                    log_output=sandbox_log,
+                )
+
             if returncode != 0:
                 logger.warning(f"Sandbox container exited with code {returncode}")
-                if result.get("metadata", {}).get("error"):
+                if error_code:
                     raise SandboxError(
                         f"Sandbox evaluation failed: {result.get('summary', 'unknown error')}",
+                        recoverable=False,
                         log_output=sandbox_log,
                     )
 
@@ -335,20 +365,39 @@ class SandboxRunner:
         """Read evaluation_result.json from sandbox output directory."""
         result_file = output_dir / "evaluation_result.json"
 
-        if not result_file.exists():
+        # The output dir is writable by the container: refuse symlinks so the
+        # validator never reads an arbitrary host file as the "result".
+        if result_file.is_symlink() or not result_file.is_file():
             raise SandboxError("Sandbox did not produce evaluation_result.json")
+        if result_file.stat().st_size > MAX_RESULT_BYTES:
+            raise SandboxError("evaluation_result.json is too large", recoverable=False)
 
-        with open(result_file, "r") as f:
-            result = json.load(f)
+        try:
+            with open(result_file, "r", encoding="utf-8") as f:
+                result = json.load(f)
+        except (OSError, ValueError) as e:
+            raise SandboxError(f"evaluation_result.json is invalid: {e}", recoverable=False) from e
 
-        # Replace sandbox-internal log_dir with validator-side path.
-        # The entrypoint copies eval logs to /sandbox/output/eval_logs/
-        # which maps to output_dir/eval_logs on the validator.
+        if not isinstance(result, dict):
+            raise SandboxError("evaluation_result.json is not an object", recoverable=False)
+        score = result.get("score")
+        if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
+            raise SandboxError(
+                f"evaluation_result.json has an invalid score: {score!r}",
+                recoverable=False,
+            )
+        if not isinstance(result.get("metadata", {}), dict):
+            result["metadata"] = {}
+
+        # log_dir is always derived validator-side; any value written by the
+        # sandbox is discarded so it cannot point the log upload at host files.
         eval_logs = output_dir / "eval_logs"
-        if eval_logs.exists():
+        if eval_logs.is_dir() and not eval_logs.is_symlink():
             result["log_dir"] = str(eval_logs)
+        else:
+            result["log_dir"] = None
 
-        logger.info(f"Sandbox evaluation score: {result.get('score', 'N/A')}")
+        logger.info(f"Sandbox evaluation score: {score}")
         return result
 
     async def _cleanup_container(self, container_name: str) -> None:
@@ -360,6 +409,44 @@ class SandboxRunner:
             )
         except Exception:
             pass  # Best-effort cleanup
+
+    @staticmethod
+    def _read_tail(path: Path, max_bytes: int = LOG_TAIL_BYTES) -> str:
+        """Return the last *max_bytes* of a file as text ('' if missing)."""
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - max_bytes))
+                return f.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    @staticmethod
+    async def _run_container(
+        cmd: list[str],
+        timeout: int,
+        log_path: Path,
+    ) -> int:
+        """Run ``docker run`` with stdout+stderr streamed to *log_path*."""
+        logger.debug(f"Running: {' '.join(cmd[:10])}...")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(log_path, "wb") as log_file:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=log_file,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            try:
+                return await asyncio.wait_for(process.wait(), timeout=timeout)
+            except asyncio.TimeoutError as e:
+                process.kill()
+                await process.wait()
+                raise SandboxError(
+                    f"Sandbox container timed out after {timeout}s",
+                    recoverable=True,
+                ) from e
 
     @staticmethod
     async def _run_cmd(
