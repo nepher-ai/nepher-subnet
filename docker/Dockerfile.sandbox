@@ -52,9 +52,16 @@ RUN useradd --system --no-create-home --shell /usr/sbin/nologin evaluator
 # Clone Isaac Lab 3.0 and install against the binary Isaac Sim at ISAACSIM_PATH.
 # Official install path for Early Access / GA stabilization is release/3.0.0.
 # ./isaaclab.sh --install pulls in isaaclab + isaaclab_tasks + isaaclab_rl etc.
+# release/3.0.0 floors aiohttp at >=3.14.3 for Isaac Sim 6.2. This image is 6.1.0,
+# whose omni.services.pip_archive copy is older. An upgrade deletes that copy and
+# dangles the symlink farm other extensions share (nvbugs 6343978). Pin the
+# requirement to the prebundled version so pip leaves it in place.
 RUN git clone --depth 1 --branch release/3.0.0 https://github.com/isaac-sim/IsaacLab.git ${ISAACLAB_PATH} \
     && ln -s ${ISAACSIM_PATH} ${ISAACLAB_PATH}/_isaac_sim \
     && cd ${ISAACLAB_PATH} \
+    && AIOHTTP_VER="$(grep -h '^Version:' ${ISAACSIM_PATH}/extscache/omni.services.pip_archive-*/pip_prebundle/aiohttp-*.dist-info/METADATA | head -1 | awk '{print $2}')" \
+    && test -n "${AIOHTTP_VER}" \
+    && sed -i "s/aiohttp>=3.14.3/aiohttp==${AIOHTTP_VER}/" pyproject.toml \
     && ./isaaclab.sh --install
 
 ENV PYTHON_CMD="${ISAACLAB_PATH}/isaaclab.sh -p"
